@@ -1,0 +1,99 @@
+name: ImmortalWrt SDK 快编
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_url:
+        description: 'SDK 下载地址（.tar.zst 或 .tar.xz）'
+        required: true
+        type: string
+        default: 'https://downloads.immortalwrt.org/releases/24.10.2/targets/mediatek/filogic/immortalwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst'
+
+env:
+  SDK_URL: ${{ github.event.inputs.sdk_url }}
+  TZ: Asia/Shanghai
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  sdk-build:
+    name: ⚡ SDK 编译关键包
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 🙌 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🛠️ 初始化环境
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install build-essential clang flex g++ gawk gcc-multilib gettext git libncurses-dev libssl-dev python3 python3-pip rsync unzip wget zlib1g-dev file xz-utils zstd
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: ⬇️ 下载并解压 SDK
+        working-directory: /workdir
+        run: |
+          wget -nv -O sdk.tar "$SDK_URL"
+          mkdir -p sdk
+          if file sdk.tar | grep -qi "Zstandard"; then
+            tar --zstd -xf sdk.tar -C sdk --strip-components=1
+          else
+            tar -xf sdk.tar -C sdk --strip-components=1
+          fi
+
+      - name: 🧩 注入本地包与修复补丁
+        run: |
+          cp -a package/luci-app-button-automation /workdir/sdk/package/
+
+          if [ -f /workdir/sdk/package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg ]; then
+            python3 - <<'PY'
+from pathlib import Path
+path = Path("/workdir/sdk/package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg")
+text = path.read_text(encoding="utf-8")
+text = text.replace(
+    '__exec_iwpriv_cmd(ifname, "ApCliAutoConnect", "3")',
+    '__exec_iwpriv_cmd(ifname, "ApCliAutoConnect", "1")',
+)
+text = text.replace(
+    'os.execute("startwapp.sh")',
+    'os.execute("command -v startwapp.sh >/dev/null 2>&1 && startwapp.sh || true")',
+)
+path.write_text(text, encoding="utf-8")
+PY
+          fi
+
+      - name: ⚙️ 更新 feeds 并编译关键包
+        run: |
+          cd /workdir/sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+          cat >> .config <<'EOF'
+CONFIG_PACKAGE_mtwifi-cfg=m
+CONFIG_PACKAGE_luci-app-button-automation=m
+EOF
+          make defconfig
+
+          CPU_THREADS="$(nproc)"
+          BUILD_JOBS="$((CPU_THREADS + 1))"
+          BUILD_LOAD="$CPU_THREADS"
+
+          make package/mtk/applications/mtwifi-cfg/clean
+          make package/mtk/applications/mtwifi-cfg/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
+
+          make package/luci-app-button-automation/clean
+          make package/luci-app-button-automation/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
+
+      - name: 📦 上传 ipk（若存在）
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-build-ipk
+          path: |
+            /workdir/sdk/bin/packages/**/mtwifi-cfg*.ipk
+            /workdir/sdk/bin/packages/**/luci-app-button-automation*.ipk
+          if-no-files-found: warn
+
