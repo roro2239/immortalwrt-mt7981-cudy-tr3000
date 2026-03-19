@@ -4,6 +4,15 @@
 [ "$ACTION" = "pressed" ] || [ "$ACTION" = "released" ] || exit 0
 
 CONFIG_NAME="button_automation"
+MONITOR_FILE="/tmp/button-automation/events.log"
+
+monitor_log() {
+	local ts
+	ts="$(date '+%Y-%m-%d %H:%M:%S')"
+	mkdir -p "/tmp/button-automation"
+	echo "${ts} [hotplug] $*" >> "$MONITOR_FILE"
+}
+
 GLOBAL_CFG="$(uci -q get ${CONFIG_NAME}.@global[0].enabled)"
 [ "$GLOBAL_CFG" = "1" ] || exit 0
 
@@ -21,20 +30,29 @@ if [ -f "$STATE_FILE" ]; then
 		DELTA_MS=$((NOW_MS - LAST_MS))
 		if [ "$DELTA_MS" -lt "$DEBOUNCE_MS" ]; then
 			logger -t button-automation "skip: button=$BUTTON action=$ACTION delta_ms=$DELTA_MS debounce_ms=$DEBOUNCE_MS"
+			monitor_log "skip button=${BUTTON} action=${ACTION} delta_ms=${DELTA_MS} debounce_ms=${DEBOUNCE_MS}"
 			exit 0
 		fi
 	fi
 fi
 
 echo "$NOW_MS" > "$STATE_FILE"
+monitor_log "recv button=${BUTTON} action=${ACTION} debounce_ms=${DEBOUNCE_MS}"
+
+MATCHED=0
 
 for section in $(uci -q show "$CONFIG_NAME" | sed -n "s/^${CONFIG_NAME}\.\([^.=]*\)=rule$/\1/p"); do
 	[ "$(uci -q get ${CONFIG_NAME}.${section}.enabled)" = "1" ] || continue
 	[ "$(uci -q get ${CONFIG_NAME}.${section}.button)" = "$BUTTON" ] || continue
 	[ "$(uci -q get ${CONFIG_NAME}.${section}.action)" = "$ACTION" ] || continue
 
+	MATCHED=1
+	monitor_log "hit section=${section} button=${BUTTON} action=${ACTION}"
 	/usr/bin/button-automation-runner "$section" "$BUTTON" "$ACTION"
+	CODE="$?"
+	monitor_log "done section=${section} code=${CODE}"
 done
 
-exit 0
+[ "$MATCHED" = "1" ] || monitor_log "no-rule button=${BUTTON} action=${ACTION}"
 
+exit 0

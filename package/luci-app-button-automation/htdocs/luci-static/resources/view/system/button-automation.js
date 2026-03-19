@@ -13,6 +13,9 @@ return view.extend({
 	render: function(ledEntries) {
 		var m, s, o;
 		var ledNames = [];
+		var monitorFile = '/tmp/button-automation/events.log';
+		var monitorTimer = null;
+		var monitorRunning = false;
 
 		if (Array.isArray(ledEntries)) {
 			ledEntries.forEach(function(entry) {
@@ -88,6 +91,101 @@ return view.extend({
 		o.placeholder = 'service network restart';
 		o.rmempty = false;
 
-		return m.render();
+		return m.render().then(function(node) {
+			var panel = E('div', {
+				'class': 'cbi-section'
+			}, [
+				E('h3', {}, _('实时监测')),
+				E('div', {
+					'style': 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;'
+				}, [
+					E('button', {
+						'class': 'btn cbi-button cbi-button-action',
+						'id': 'btn-monitor-toggle',
+						'click': function(ev) {
+							ev.preventDefault();
+							toggleMonitor();
+						}
+					}, _('开始监测')),
+					E('button', {
+						'class': 'btn cbi-button',
+						'id': 'btn-monitor-clear',
+						'click': function(ev) {
+							ev.preventDefault();
+							clearMonitor();
+						}
+					}, _('清空日志')),
+					E('span', {
+						'id': 'btn-monitor-status',
+						'style': 'opacity:.8;'
+					}, _('未启动'))
+				]),
+				E('pre', {
+					'id': 'btn-monitor-log',
+					'style': 'max-height:320px;overflow:auto;background:#111;color:#d7f3d1;padding:10px;white-space:pre-wrap;word-break:break-word;'
+				}, _('暂无日志'))
+			]);
+
+			function setStatus(text) {
+				var status = node.querySelector('#btn-monitor-status');
+				if (status)
+					status.textContent = text;
+			}
+
+			function setToggleText(text) {
+				var btn = node.querySelector('#btn-monitor-toggle');
+				if (btn)
+					btn.textContent = text;
+			}
+
+			function refreshMonitor() {
+				return fs.read(monitorFile).then(function(content) {
+					var box = node.querySelector('#btn-monitor-log');
+					if (!box)
+						return;
+
+					if (!content || !content.trim())
+						box.textContent = _('暂无日志');
+					else
+						box.textContent = content;
+
+					box.scrollTop = box.scrollHeight;
+				}).catch(function() {
+					var box = node.querySelector('#btn-monitor-log');
+					if (box)
+						box.textContent = _('暂无日志');
+				});
+			}
+
+			function toggleMonitor() {
+				if (monitorRunning) {
+					if (monitorTimer)
+						window.clearInterval(monitorTimer);
+					monitorTimer = null;
+					monitorRunning = false;
+					setStatus(_('已停止'));
+					setToggleText(_('开始监测'));
+					return;
+				}
+
+				monitorRunning = true;
+				setStatus(_('监测中（每 1.5 秒刷新）'));
+				setToggleText(_('停止监测'));
+				refreshMonitor();
+				monitorTimer = window.setInterval(refreshMonitor, 1500);
+			}
+
+			function clearMonitor() {
+				fs.write(monitorFile, '').then(function() {
+					refreshMonitor();
+					setStatus(_('已清空'));
+				}).catch(function() {
+					setStatus(_('清空失败（检查权限）'));
+				});
+			}
+
+			node.appendChild(panel);
+			return node;
+		});
 	}
 });

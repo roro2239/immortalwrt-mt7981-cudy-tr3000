@@ -4,11 +4,16 @@ CONFIG_NAME="button_automation"
 SECTION="$1"
 BUTTON_NAME="$2"
 ACTION_NAME="$3"
+MONITOR_FILE="/tmp/button-automation/events.log"
 
 [ -n "$SECTION" ] || exit 1
 
 log() {
 	logger -t button-automation "$1"
+	local ts
+	ts="$(date '+%Y-%m-%d %H:%M:%S')"
+	mkdir -p "/tmp/button-automation"
+	echo "${ts} [runner] $1" >> "$MONITOR_FILE"
 }
 
 wifi_toggle() {

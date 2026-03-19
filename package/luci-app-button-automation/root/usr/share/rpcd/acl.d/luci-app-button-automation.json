@@ -5,13 +5,22 @@
       "uci": [
         "button_automation",
         "wireless"
-      ]
+      ],
+      "file": {
+        "/tmp/button-automation/events.log": [
+          "read"
+        ]
+      }
     },
     "write": {
       "uci": [
         "button_automation"
-      ]
+      ],
+      "file": {
+        "/tmp/button-automation/events.log": [
+          "write"
+        ]
+      }
     }
   }
 }
-
