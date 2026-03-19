@@ -21,3 +21,4 @@
 - [PERF] 2026-03-19：`openwrt-sdk-builder.yml` 新增开关 `reuse_sdk_cache`，可选复用 SDK 目录缓存；关闭时强制重新下载 SDK，便于排查缓存污染问题。
 - [FIX] 2026-03-19：修复 SDK 工作流 `mtwifi-cfg` 编译失败：新增 `source_repo/source_branch` 输入并拉取上游 MTK 包（`datconf`、`wifi-profile`、`mtwifi-cfg`）注入 SDK 后再编译，避免 SDK 缺包导致目标不存在。
 - [FIX] 2026-03-19：优化 SDK 工作流上游拉取步骤：改为 `--filter=blob:none --sparse` 稀疏拉取，仅检出所需 MTK 目录；增加 20 秒心跳日志与 8 分钟超时保护，避免“长时间无输出看起来卡死”。
+- [FIX] 2026-03-19：修复 SDK 工作流 `datconf` 构建失败：SDK 快编改为仅编译 `mtwifi-cfg` 与 `luci-app-button-automation`；注入阶段将 `mtwifi-cfg` 的依赖改为 SDK 可用子集（`+iwinfo +lua-cjson`），避免被 `datconf-lua/wifi-dats` 依赖阻塞。

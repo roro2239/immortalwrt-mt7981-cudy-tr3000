@@ -107,20 +107,19 @@ jobs:
 
           cd src-upstream
           git sparse-checkout set \
-            package/mtk/applications/mtwifi-cfg \
-            package/mtk/applications/datconf \
-            package/mtk/drivers/wifi-profile
+            package/mtk/applications/mtwifi-cfg
 
       - name: 🧩 注入本地包与修复补丁
         run: |
           mkdir -p /workdir/sdk/package/mtk/applications
-          mkdir -p /workdir/sdk/package/mtk/drivers
 
           cp -a /workdir/src-upstream/package/mtk/applications/mtwifi-cfg /workdir/sdk/package/mtk/applications/
-          cp -a /workdir/src-upstream/package/mtk/applications/datconf /workdir/sdk/package/mtk/applications/
-          cp -a /workdir/src-upstream/package/mtk/drivers/wifi-profile /workdir/sdk/package/mtk/drivers/
 
           cp -a package/luci-app-button-automation /workdir/sdk/package/
+
+          if [ -f /workdir/sdk/package/mtk/applications/mtwifi-cfg/Makefile ]; then
+            sed -i 's/DEPENDS:=.*/DEPENDS:=+iwinfo +lua-cjson/' /workdir/sdk/package/mtk/applications/mtwifi-cfg/Makefile
+          fi
 
           if [ -f /workdir/sdk/package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg ]; then
             python3 -c "from pathlib import Path; p=Path('/workdir/sdk/package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg'); t=p.read_text(encoding='utf-8'); t=t.replace('__exec_iwpriv_cmd(ifname, \"ApCliAutoConnect\", \"3\")','__exec_iwpriv_cmd(ifname, \"ApCliAutoConnect\", \"1\")'); t=t.replace('os.execute(\"startwapp.sh\")','os.execute(\"command -v startwapp.sh >/dev/null 2>&1 && startwapp.sh || true\")'); p.write_text(t, encoding='utf-8')"
@@ -142,16 +141,8 @@ jobs:
           BUILD_JOBS="$((CPU_THREADS + 1))"
           BUILD_LOAD="$CPU_THREADS"
 
-          make package/mtk/applications/datconf/clean
-          make package/mtk/applications/datconf/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
-
-          make package/mtk/drivers/wifi-profile/clean
-          make package/mtk/drivers/wifi-profile/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
-
-          make package/mtk/applications/mtwifi-cfg/clean
           make package/mtk/applications/mtwifi-cfg/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
 
-          make package/luci-app-button-automation/clean
           make package/luci-app-button-automation/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
 
       - name: 📦 上传 ipk（若存在）
@@ -159,8 +150,6 @@ jobs:
         with:
           name: sdk-build-ipk
           path: |
-            /workdir/sdk/bin/packages/**/datconf-lua*.ipk
-            /workdir/sdk/bin/packages/**/wifi-dats*.ipk
             /workdir/sdk/bin/packages/**/mtwifi-cfg*.ipk
             /workdir/sdk/bin/packages/**/luci-app-button-automation*.ipk
           if-no-files-found: warn
