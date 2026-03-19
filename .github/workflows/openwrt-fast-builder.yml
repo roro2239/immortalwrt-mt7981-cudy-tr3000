@@ -26,6 +26,16 @@ on:
         required: false
         type: boolean
         default: true
+      mtwifi_pkg_release:
+        description: 'mtwifi-cfg 的 PKG_RELEASE（数字）'
+        required: false
+        type: string
+        default: '1'
+      artifact_tag:
+        description: '产物标签（可选）'
+        required: false
+        type: string
+        default: ''
 
 env:
   REPO_URL: ${{ github.event.inputs.repo }}
@@ -36,6 +46,8 @@ env:
   DIY_P2_SH: diy-part2.sh
   DISABLE_SYSTEM_UPDATE_INPUT: ${{ github.event.inputs.disable_system_update || 'true' }}
   ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'true' }}
+  MTWIFI_PKG_RELEASE_INPUT: ${{ github.event.inputs.mtwifi_pkg_release || '1' }}
+  ARTIFACT_TAG_INPUT: ${{ github.event.inputs.artifact_tag || '' }}
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 20G
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -119,6 +131,18 @@ jobs:
       - name: ⚡ 编译关键包
         run: |
           cd /workdir/openwrt
+          MTWIFI_REL="$MTWIFI_PKG_RELEASE_INPUT"
+          if ! echo "$MTWIFI_REL" | grep -Eq '^[0-9]+$'; then
+            echo "❌ mtwifi_pkg_release 必须是数字，当前: $MTWIFI_REL"
+            exit 1
+          fi
+
+          MTWIFI_MK="package/mtk/applications/mtwifi-cfg/Makefile"
+          if [ -f "$MTWIFI_MK" ]; then
+            sed -i -E "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${MTWIFI_REL}/" "$MTWIFI_MK"
+            echo "✅ mtwifi-cfg PKG_RELEASE 已设置为 ${MTWIFI_REL}"
+          fi
+
           cp -f $GITHUB_WORKSPACE/config/256m.config .config
           make defconfig
 
@@ -135,7 +159,7 @@ jobs:
       - name: 📦 上传 ipk（若存在）
         uses: actions/upload-artifact@v4
         with:
-          name: fast-verify-ipk
+          name: fast-verify-ipk-${{ env.ARTIFACT_TAG_INPUT || env.MTWIFI_PKG_RELEASE_INPUT }}
           path: |
             /workdir/openwrt/bin/packages/**/mtwifi-cfg*.ipk
             /workdir/openwrt/bin/packages/**/luci-app-button-automation*.ipk
