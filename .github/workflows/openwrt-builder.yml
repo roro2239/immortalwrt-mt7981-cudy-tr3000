@@ -316,11 +316,36 @@ jobs:
             make download -j$(nproc)
             
             # 5. 开始编译
-            # 使用 ccache 加速，并保留 Toolchain
+            # 使用 ccache 加速，并保留 Toolchain；心跳日志避免长时间无输出。
+            start_heartbeat() {
+              (
+                while true; do
+                  echo "⏳ 编译进行中: $(date '+%F %T')"
+                  sleep 60
+                done
+              ) &
+              HEARTBEAT_PID=$!
+            }
+
+            stop_heartbeat() {
+              if [ -n "${HEARTBEAT_PID:-}" ]; then
+                kill "$HEARTBEAT_PID" 2>/dev/null || true
+                wait "$HEARTBEAT_PID" 2>/dev/null || true
+                unset HEARTBEAT_PID
+              fi
+            }
+
+            start_heartbeat
             if ! make -j$(nproc) CC="ccache gcc" CXX="ccache g++"; then
+              stop_heartbeat
               echo "⚠️ 多线程构建失败，回退到单线程重试..."
-              make -j1 V=s || exit 1
+              start_heartbeat
+              if ! make -j1 V=s; then
+                stop_heartbeat
+                exit 1
+              fi
             fi
+            stop_heartbeat
 
             echo "✅ $DEV 构建完成。"
             df -hT /workdir
