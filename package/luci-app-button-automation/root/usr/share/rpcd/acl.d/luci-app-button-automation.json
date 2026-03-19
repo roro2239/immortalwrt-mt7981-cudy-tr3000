@@ -1,0 +1,17 @@
+{
+  "luci-app-button-automation": {
+    "description": "Grant access to button automation settings",
+    "read": {
+      "uci": [
+        "button_automation",
+        "wireless"
+      ]
+    },
+    "write": {
+      "uci": [
+        "button_automation"
+      ]
+    }
+  }
+}
+

@@ -1,0 +1,14 @@
+{
+  "admin/system/button_automation": {
+    "title": "按键自动化",
+    "order": 90,
+    "action": {
+      "type": "view",
+      "path": "system/button-automation"
+    },
+    "depends": {
+      "acl": [ "luci-app-button-automation" ]
+    }
+  }
+}
+

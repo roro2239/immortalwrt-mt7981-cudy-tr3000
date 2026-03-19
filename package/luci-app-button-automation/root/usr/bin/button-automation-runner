@@ -1,0 +1,102 @@
+#!/bin/sh
+
+CONFIG_NAME="button_automation"
+SECTION="$1"
+BUTTON_NAME="$2"
+ACTION_NAME="$3"
+
+[ -n "$SECTION" ] || exit 1
+
+log() {
+	logger -t button-automation "$1"
+}
+
+wifi_toggle() {
+	local state="$1"
+	local disabled="1"
+	if [ "$state" = "on" ]; then
+		disabled="0"
+	fi
+
+	for dev in $(uci -q show wireless | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+		uci -q set "wireless.${dev}.disabled=${disabled}"
+	done
+	uci -q commit wireless
+	wifi
+	log "wifi: button=$BUTTON_NAME action=$ACTION_NAME state=$state"
+}
+
+led_toggle() {
+	local led_name="$1"
+	local led_state="$2"
+	local led_path="/sys/class/leds/${led_name}/brightness"
+
+	if [ ! -w "$led_path" ]; then
+		log "led: button=$BUTTON_NAME action=$ACTION_NAME led=$led_name not-writable"
+		return 1
+	fi
+
+	if [ "$led_state" = "on" ]; then
+		echo 1 > "$led_path"
+	else
+		echo 0 > "$led_path"
+	fi
+	log "led: button=$BUTTON_NAME action=$ACTION_NAME led=$led_name state=$led_state"
+}
+
+run_custom_command() {
+	local allow_custom
+	local command
+
+	allow_custom="$(uci -q get ${CONFIG_NAME}.@global[0].allow_custom_command)"
+	if [ "$allow_custom" != "1" ]; then
+		log "command: blocked by global switch"
+		return 1
+	fi
+
+	command="$(uci -q get ${CONFIG_NAME}.${SECTION}.command)"
+	[ -n "$command" ] || {
+		log "command: empty command section=$SECTION"
+		return 1
+	}
+
+	sh -c "$command"
+	local code=$?
+	log "command: button=$BUTTON_NAME action=$ACTION_NAME code=$code section=$SECTION"
+	return $code
+}
+
+op_type="$(uci -q get ${CONFIG_NAME}.${SECTION}.op_type)"
+case "$op_type" in
+wifi)
+	wifi_state="$(uci -q get ${CONFIG_NAME}.${SECTION}.wifi_state)"
+	[ "$wifi_state" = "on" ] || [ "$wifi_state" = "off" ] || {
+		log "wifi: invalid state section=$SECTION"
+		exit 1
+	}
+	wifi_toggle "$wifi_state"
+	;;
+led)
+	led_name="$(uci -q get ${CONFIG_NAME}.${SECTION}.led_name)"
+	led_state="$(uci -q get ${CONFIG_NAME}.${SECTION}.led_state)"
+	[ -n "$led_name" ] || {
+		log "led: empty led_name section=$SECTION"
+		exit 1
+	}
+	[ "$led_state" = "on" ] || [ "$led_state" = "off" ] || {
+		log "led: invalid state section=$SECTION"
+		exit 1
+	}
+	led_toggle "$led_name" "$led_state"
+	;;
+command)
+	run_custom_command
+	;;
+*)
+	log "invalid op_type=$op_type section=$SECTION"
+	exit 1
+	;;
+esac
+
+exit $?
+

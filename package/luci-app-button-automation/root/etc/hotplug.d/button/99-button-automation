@@ -1,0 +1,40 @@
+#!/bin/sh
+
+[ -n "$BUTTON" ] || exit 0
+[ "$ACTION" = "pressed" ] || [ "$ACTION" = "released" ] || exit 0
+
+CONFIG_NAME="button_automation"
+GLOBAL_CFG="$(uci -q get ${CONFIG_NAME}.@global[0].enabled)"
+[ "$GLOBAL_CFG" = "1" ] || exit 0
+
+DEBOUNCE_MS="$(uci -q get ${CONFIG_NAME}.@global[0].debounce_ms)"
+[ -n "$DEBOUNCE_MS" ] || DEBOUNCE_MS="500"
+
+NOW_MS="$(awk '{print int($1 * 1000)}' /proc/uptime)"
+STATE_DIR="/tmp/button-automation"
+STATE_FILE="${STATE_DIR}/${BUTTON}_${ACTION}"
+mkdir -p "$STATE_DIR"
+
+if [ -f "$STATE_FILE" ]; then
+	LAST_MS="$(cat "$STATE_FILE" 2>/dev/null)"
+	if [ -n "$LAST_MS" ]; then
+		DELTA_MS=$((NOW_MS - LAST_MS))
+		if [ "$DELTA_MS" -lt "$DEBOUNCE_MS" ]; then
+			logger -t button-automation "skip: button=$BUTTON action=$ACTION delta_ms=$DELTA_MS debounce_ms=$DEBOUNCE_MS"
+			exit 0
+		fi
+	fi
+fi
+
+echo "$NOW_MS" > "$STATE_FILE"
+
+for section in $(uci -q show "$CONFIG_NAME" | sed -n "s/^${CONFIG_NAME}\.\([^.=]*\)=rule$/\1/p"); do
+	[ "$(uci -q get ${CONFIG_NAME}.${section}.enabled)" = "1" ] || continue
+	[ "$(uci -q get ${CONFIG_NAME}.${section}.button)" = "$BUTTON" ] || continue
+	[ "$(uci -q get ${CONFIG_NAME}.${section}.action)" = "$ACTION" ] || continue
+
+	/usr/bin/button-automation-runner "$section" "$BUTTON" "$ACTION"
+done
+
+exit 0
+

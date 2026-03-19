@@ -22,6 +22,13 @@ git clone --depth=1 --single-branch --branch master https://github.com/jerrykuku
 git clone https://github.com/timsaya/luci-app-bandix package/luci-app-bandix
 git clone https://github.com/timsaya/openwrt-bandix package/openwrt-bandix
 
+if [ -d "${GITHUB_WORKSPACE}/package/luci-app-button-automation" ]; then
+  mkdir -p package/luci-app-button-automation
+  cp -a "${GITHUB_WORKSPACE}/package/luci-app-button-automation/." package/luci-app-button-automation/
+else
+  echo "未找到本地包 luci-app-button-automation，跳过"
+fi
+
 if [ "${ISTORE_ENABLE:-true}" = "true" ]; then
   git clone https://github.com/linkease/istore package/istore
 else
