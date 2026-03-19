@@ -114,6 +114,7 @@ env:
   DIY_P2_SH: diy-part2.sh
   UPLOAD_RELEASE: ${{ github.event.inputs.release }}
   PRERELEASE: ${{ github.event.inputs.prerelease }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   TZ: Asia/Shanghai
 
 jobs:
@@ -278,15 +279,15 @@ jobs:
               echo "CONFIG_TARGET_PREINIT_IP=\"${LAN_IP}\"" >> .config
             fi
 
-            if [ ! -f package/base-files/files/bin/config_generate ]; then
-              echo "❌ 未找到配置文件: package/base-files/files/bin/config_generate"
-              exit 1
-            fi
-            sed -i -E "s@(set network\\.lan\\.ipaddr=')[^']*(')@\\1${LAN_IP}\\2@" package/base-files/files/bin/config_generate
-            if ! grep -Fq "set network.lan.ipaddr='${LAN_IP}'" package/base-files/files/bin/config_generate; then
-              echo "❌ 后台地址写入失败: $LAN_IP"
-              exit 1
-            fi
+            mkdir -p files/etc/uci-defaults
+            printf '%s\n' \
+              '#!/bin/sh' \
+              '# 首次启动时应用自定义 LAN 地址，避免依赖上游 config_generate 细节。' \
+              "uci -q set network.lan.ipaddr='${LAN_IP}'" \
+              'uci -q commit network' \
+              'rm -f /etc/uci-defaults/99-custom-lan-ip' \
+              > files/etc/uci-defaults/99-custom-lan-ip
+            chmod +x files/etc/uci-defaults/99-custom-lan-ip
 
             ENABLE_PKGS="$TOGGLE_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT")"
             DISABLE_PKGS="$TOGGLE_REMOVE $(normalize_packages "$REMOVE_PACKAGES_INPUT")"
