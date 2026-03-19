@@ -5,23 +5,56 @@
 
 return view.extend({
 	load: function() {
-		return fs.list('/sys/class/leds').catch(function() {
-			return [];
-		});
+		return Promise.all([
+			fs.list('/sys/class/leds').catch(function() {
+				return [];
+			}),
+			fs.list('/etc/rc.button').catch(function() {
+				return [];
+			}),
+			fs.read('/tmp/button-automation/events.log').catch(function() {
+				return '';
+			})
+		]);
 	},
 
-	render: function(ledEntries) {
+	render: function(loadData) {
 		var m, s, o;
 		var ledNames = [];
+		var buttonNames = [];
 		var monitorFile = '/tmp/button-automation/events.log';
 		var monitorTimer = null;
 		var monitorRunning = false;
+		var ledEntries = loadData[0] || [];
+		var rcButtonEntries = loadData[1] || [];
+		var monitorLog = loadData[2] || '';
 
 		if (Array.isArray(ledEntries)) {
 			ledEntries.forEach(function(entry) {
 				if (entry && entry.name)
 					ledNames.push(entry.name);
 			});
+		}
+
+		if (Array.isArray(rcButtonEntries)) {
+			rcButtonEntries.forEach(function(entry) {
+				if (entry && entry.name && buttonNames.indexOf(entry.name) === -1)
+					buttonNames.push(entry.name);
+			});
+		}
+
+		if (monitorLog) {
+			monitorLog.split('\n').forEach(function(line) {
+				var m = line.match(/button=([A-Za-z0-9_.-]+)/);
+				if (m && m[1] && buttonNames.indexOf(m[1]) === -1)
+					buttonNames.push(m[1]);
+			});
+		}
+
+		if (buttonNames.indexOf('BTN_0') !== -1) {
+			buttonNames = ['BTN_0'].concat(buttonNames.filter(function(name) {
+				return name !== 'BTN_0';
+			}));
 		}
 
 		m = new form.Map('button_automation', _('按键自动化'), _('为滑动开关的 pressed/released 事件绑定动作。'));
@@ -52,8 +85,11 @@ return view.extend({
 		o.default = '1';
 		o.rmempty = false;
 
-		o = s.option(form.Value, 'button', _('按钮名'));
-		o.placeholder = 'mode_switch';
+		o = s.option(form.ListValue, 'button', _('按钮名'));
+		buttonNames.forEach(function(name) {
+			o.value(name, name);
+		});
+		o.description = buttonNames.length ? _('自动检测到系统按钮，直接选择即可。') : _('未检测到按钮，请先拨动一次开关再刷新页面。');
 		o.rmempty = false;
 
 		o = s.option(form.ListValue, 'action', _('动作事件'));
