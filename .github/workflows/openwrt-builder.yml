@@ -25,11 +25,36 @@ on:
         required: false
         type: string
         default: ''
-      ssh:
-        description: '是否执行菜单配置 (make menuconfig)'
+      firmware_name:
+        description: '固件名称（为空默认 ImmortalWrt）'
+        required: false
+        type: string
+        default: ''
+      package_preset:
+        description: '预设包方案（中文）'
+        required: false
+        type: choice
+        default: '全量'
+        options:
+          - '全量'
+          - '精简'
+          - '管理'
+          - '代理'
+      enable_istore:
+        description: '是否启用 iStore'
         required: false
         type: boolean
-        default: false
+        default: true
+      extra_packages:
+        description: '额外安装包（空格/逗号/换行分隔）'
+        required: false
+        type: string
+        default: ''
+      remove_packages:
+        description: '移除包（空格/逗号/换行分隔）'
+        required: false
+        type: string
+        default: ''
       release:
         description: '是否发布编译产物到发行版'
         required: false
@@ -43,11 +68,16 @@ on:
 
 env:
   DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device }}
+  FIRMWARE_NAME_INPUT: ${{ github.event.inputs.firmware_name || '' }}
+  PACKAGE_PRESET_INPUT: ${{ github.event.inputs.package_preset || '全量' }}
+  ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'true' }}
+  EXTRA_PACKAGES_INPUT: ${{ github.event.inputs.extra_packages || '' }}
+  REMOVE_PACKAGES_INPUT: ${{ github.event.inputs.remove_packages || '' }}
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 2G
-  REPO_URL: ${{ github.event.inputs.repo }}
+  REPO_URL: ${{ github.event.inputs.repo || github.event.client_payload.repo }}
   REPO_BRANCH: openwrt-24.10-6.6
-  REPO_COMMIT: ${{ github.event.inputs.commit }}
+  REPO_COMMIT: ${{ github.event.inputs.commit || github.event.client_payload.commit }}
   FEEDS_CONF: feeds.conf.default
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
@@ -56,74 +86,8 @@ env:
   TZ: Asia/Shanghai
 
 jobs:
-  menuconfig:
-    name: ⚙️ 菜单配置并推送
-    if: github.event.inputs.ssh == 'true'
-    runs-on: ubuntu-22.04
-    steps:
-      - name: 🙌 检出代码
-        uses: actions/checkout@v4
-
-      - name: 🛠️ 初始化环境
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libncurses-dev build-essential git wget python3 bzip2
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-
-      - name: 🪜 克隆源码
-        working-directory: /workdir
-        run: |
-          git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-      - name: 🔧 设置设备变量
-        run: |
-          echo "CONFIG_FILE=config/256m.config" >> $GITHUB_ENV
-
-      - name: 👩‍💻 复制已有配置（若存在）
-        run: |
-          if [ -f "$GITHUB_WORKSPACE/${CONFIG_FILE}" ]; then
-            cp -f "$GITHUB_WORKSPACE/${CONFIG_FILE}" /workdir/openwrt/.config
-          fi
-
-      - name: ⚙️ 加载自定义 feeds
-        run: |
-          [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-          chmod +x $DIY_P1_SH
-          cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P1_SH
-
-      - name: 🧬 更新并安装 feeds
-        run: cd openwrt && ./scripts/feeds update -a && ./scripts/feeds install -a
-
-      - name: 🧩 加载自定义配置
-        run: |
-          [ -e $CONFIG_FILE ] && cp -f $CONFIG_FILE openwrt/.config
-          chmod +x $DIY_P2_SH
-          cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P2_SH
-
-      - name: ⌨️ SSH 连接进行菜单配置
-        uses: mxschmitt/action-tmate@v3
-        timeout-minutes: 15
-          
-      - name: 📤 推送配置到主分支
-        run: |
-          SRC="/workdir/openwrt/.config"
-          DST="$GITHUB_WORKSPACE/${CONFIG_FILE}"
-          mkdir -p "$(dirname "$DST")"
-          cp -f "$SRC" "$DST"
-          cd "$GITHUB_WORKSPACE"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$CONFIG_FILE"
-          git diff --cached --quiet || (git commit -m "更新配置: ${CONFIG_FILE}" && git push origin HEAD:main)
-
   build:
     name: 🔨 构建固件
-    needs: menuconfig
-    if: always() && (needs.menuconfig.result == 'success' || needs.menuconfig.result == 'skipped')
     runs-on: ubuntu-22.04
     
     steps:
@@ -180,6 +144,7 @@ jobs:
           cd openwrt
           [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && mv $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
           chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
+          export ISTORE_ENABLE="$ISTORE_ENABLE_INPUT"
           $GITHUB_WORKSPACE/$DIY_P1_SH
           ./scripts/feeds update -a
           ./scripts/feeds install -a
@@ -189,6 +154,58 @@ jobs:
       - name: 🔨 构建 256M 固件
         id: compile
         run: |
+          FW_NAME="${FIRMWARE_NAME_INPUT}"
+          [ -z "$FW_NAME" ] && FW_NAME="ImmortalWrt"
+          FW_TAG_PREFIX=$(echo "$FW_NAME" | tr '[:space:]' '-' | tr -cd '[:alnum:]._-')
+          [ -z "$FW_TAG_PREFIX" ] && FW_TAG_PREFIX="ImmortalWrt"
+          echo "固件名称: $FW_NAME"
+          echo "固件标签前缀: $FW_TAG_PREFIX"
+          echo "预设包方案: $PACKAGE_PRESET_INPUT"
+          echo "启用 iStore: $ISTORE_ENABLE_INPUT"
+          echo "fw_name=$FW_NAME" >> $GITHUB_OUTPUT
+          echo "fw_tag_prefix=$FW_TAG_PREFIX" >> $GITHUB_OUTPUT
+
+          normalize_packages() {
+            printf '%s\n' "$1" | tr ',;' '\n\n' | tr ' ' '\n' | tr -d '\r' | sed '/^$/d'
+          }
+
+          validate_package_name() {
+            if [[ ! "$1" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+              echo "❌ 非法包名: $1"
+              exit 1
+            fi
+          }
+
+          case "$PACKAGE_PRESET_INPUT" in
+            "全量"|"full")
+              PRESET_ADD=""
+              PRESET_REMOVE=""
+              ;;
+            "精简"|"lite")
+              PRESET_ADD=""
+              PRESET_REMOVE="luci-app-openclash luci-app-package-manager luci-app-wrtbwmon luci-app-upnp luci-i18n-package-manager-zh-cn luci-i18n-wrtbwmon-zh-cn luci-i18n-upnp-zh-cn"
+              ;;
+            "管理"|"manage")
+              PRESET_ADD="luci-app-ttyd luci-i18n-ttyd-zh-cn luci-app-upnp luci-i18n-upnp-zh-cn"
+              PRESET_REMOVE="luci-app-openclash luci-app-package-manager luci-app-wrtbwmon luci-i18n-package-manager-zh-cn luci-i18n-wrtbwmon-zh-cn"
+              ;;
+            "代理"|"proxy")
+              PRESET_ADD="luci-app-ttyd luci-i18n-ttyd-zh-cn luci-app-upnp luci-i18n-upnp-zh-cn luci-app-openclash"
+              PRESET_REMOVE="luci-app-package-manager luci-app-wrtbwmon luci-i18n-package-manager-zh-cn luci-i18n-wrtbwmon-zh-cn"
+              ;;
+            *)
+              echo "❌ 未知预设包方案: $PACKAGE_PRESET_INPUT"
+              exit 1
+              ;;
+          esac
+
+          if [ "$ISTORE_ENABLE_INPUT" = "true" ]; then
+            FORCED_ADD="luci-app-store luci-lib-taskd luci-lib-xterm taskd"
+            FORCED_REMOVE=""
+          else
+            FORCED_ADD=""
+            FORCED_REMOVE="luci-app-store luci-lib-taskd luci-lib-xterm taskd app-store-ui"
+          fi
           DEVICES="256M"
           mkdir -p $GITHUB_WORKSPACE/firmware_collection
 
@@ -203,9 +220,32 @@ jobs:
             
             # 3. 加载配置
             cp -f $GITHUB_WORKSPACE/$CONFIG .config
+            echo "CONFIG_VERSION_DIST=\"$FW_NAME\"" >> .config
+
+            ENABLE_PKGS="$FORCED_ADD $PRESET_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT")"
+            DISABLE_PKGS="$FORCED_REMOVE $PRESET_REMOVE $(normalize_packages "$REMOVE_PACKAGES_INPUT")"
+
+            for PKG in $ENABLE_PKGS; do
+              validate_package_name "$PKG"
+              echo "CONFIG_PACKAGE_${PKG}=y" >> .config
+            done
+
+            for PKG in $DISABLE_PKGS; do
+              validate_package_name "$PKG"
+              echo "# CONFIG_PACKAGE_${PKG} is not set" >> .config
+            done
             
             # 4. 刷新配置并下载
             make defconfig
+
+            for PKG in $FORCED_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT"); do
+              validate_package_name "$PKG"
+              if ! grep -Eq "^CONFIG_PACKAGE_${PKG}=(y|m)$" .config; then
+                echo "❌ 包不可用或未被启用: $PKG"
+                exit 1
+              fi
+            done
+
             make download -j$(nproc)
             
             # 5. 开始编译
@@ -229,19 +269,22 @@ jobs:
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
-          name: ImmortalWrt_Combined_${{ env.DEVICE_INPUT }}_${{ env.REPO_BRANCH }}
+          name: ${{ steps.compile.outputs.fw_tag_prefix }}_Combined_${{ env.DEVICE_INPUT }}_${{ env.REPO_BRANCH }}
           path: ${{ github.workspace }}/firmware_collection/*
 
       - name: 📌 生成发布标签
         id: tag
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+        env:
+          FW_NAME: ${{ steps.compile.outputs.fw_name }}
+          FW_TAG_PREFIX: ${{ steps.compile.outputs.fw_tag_prefix }}
         run: |
           BUILD_TIME=$(date +"%Y%m%d-%H%M")
-          RELEASE_TAG="ImmortalWrt-${BUILD_TIME}"
+          RELEASE_TAG="${FW_TAG_PREFIX}-${BUILD_TIME}"
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
           cat > release.txt << EOF
-          ## 📦 ImmortalWrt 固件发布
+          ## 📦 ${FW_NAME} 固件发布
 
           **🏷️ 版本标签:** $RELEASE_TAG
           **🌿 分支:** $REPO_BRANCH
