@@ -351,8 +351,8 @@ jobs:
               '      uci -q set wireless.${dev}.channel=36' \
               '      changed=1' \
               '    fi' \
-              '    if [ "$htmode" = "HE160" ]; then' \
-              '      uci -q set wireless.${dev}.htmode=HE80' \
+              '    if [ "$htmode" != "VHT80" ]; then' \
+              '      uci -q set wireless.${dev}.htmode=VHT80' \
               '      changed=1' \
               '    fi' \
               '  fi' \
