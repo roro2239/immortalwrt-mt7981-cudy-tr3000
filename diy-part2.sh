@@ -22,6 +22,27 @@
 # 临时解决Rust问题
 sed -i 's/ci-llvm=true/ci-llvm=false/g' feeds/packages/lang/rust/Makefile
 
+# 修复 mtwifi-cfg 扫描策略与缺失脚本告警
+if [ -f package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg ]; then
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path("package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg")
+text = path.read_text(encoding="utf-8")
+
+text = text.replace(
+    '__exec_iwpriv_cmd(ifname, "ApCliAutoConnect", "3")',
+    '__exec_iwpriv_cmd(ifname, "ApCliAutoConnect", "1")',
+)
+text = text.replace(
+    'os.execute("startwapp.sh")',
+    'os.execute("command -v startwapp.sh >/dev/null 2>&1 && startwapp.sh || true")',
+)
+
+path.write_text(text, encoding="utf-8")
+PY
+fi
+
 # 禁用“系统在线更新”（隐藏菜单并移除对应 ACL）
 if [ "${DISABLE_SYSTEM_UPDATE:-true}" = "true" ]; then
 python3 - <<'PY'

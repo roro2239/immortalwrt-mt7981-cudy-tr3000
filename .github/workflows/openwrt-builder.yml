@@ -340,6 +340,54 @@ jobs:
             mkdir -p files/etc/uci-defaults
             printf '%s\n' \
               '#!/bin/sh' \
+              '# 首次启动时应用 mtwifi 稳定参数，降低扫描导致的掉线与卡顿。' \
+              'changed=0' \
+              '' \
+              'for dev in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p"); do' \
+              '  band=$(uci -q get wireless.${dev}.band)' \
+              '  channel=$(uci -q get wireless.${dev}.channel)' \
+              '  htmode=$(uci -q get wireless.${dev}.htmode)' \
+              '  if [ "$band" = "2g" ] && [ "$channel" = "auto" ]; then' \
+              '    uci -q set wireless.${dev}.channel=11' \
+              '    changed=1' \
+              '  fi' \
+              '  if [ "$band" = "5g" ]; then' \
+              '    if [ "$channel" = "auto" ]; then' \
+              '      uci -q set wireless.${dev}.channel=36' \
+              '      changed=1' \
+              '    fi' \
+              '    if [ "$htmode" = "HE160" ]; then' \
+              '      uci -q set wireless.${dev}.htmode=HE80' \
+              '      changed=1' \
+              '    fi' \
+              '  fi' \
+              'done' \
+              '' \
+              'for iface in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do' \
+              '  mode=$(uci -q get wireless.${iface}.mode)' \
+              '  [ "$mode" = "sta" ] || continue' \
+              '  uci -q set wireless.${iface}.disabled=1' \
+              '  logger -t mtwifi-stability "disable sta iface=${iface}"' \
+              '  changed=1' \
+              'done' \
+              '' \
+              'for net in wwan wwan6; do' \
+              '  if uci -q get network.${net} >/dev/null; then' \
+              '    uci -q set network.${net}.auto=0' \
+              '    changed=1' \
+              '  fi' \
+              'done' \
+              '' \
+              'if [ "$changed" = "1" ]; then' \
+              '  uci -q commit wireless' \
+              '  uci -q commit network' \
+              'fi' \
+              'rm -f /etc/uci-defaults/96-mtwifi-stability' \
+              > files/etc/uci-defaults/96-mtwifi-stability
+            chmod +x files/etc/uci-defaults/96-mtwifi-stability
+
+            printf '%s\n' \
+              '#!/bin/sh' \
               '# 首次启动时应用系统名与 WiFi 名称。' \
               "uci -q set system.@system[0].hostname='${HOSTNAME_ESCAPED}'" \
               "if uci -q get wireless.default_radio0 >/dev/null; then uci -q set wireless.default_radio0.ssid='${WIFI_SSID_2G_ESCAPED}'; fi" \
