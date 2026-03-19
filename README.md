@@ -57,8 +57,8 @@ echo 1 > /sys/class/gpio/modem_power/value
 
 - [OpenClash](https://github.com/vernesong/OpenClash)
 - [Bandix](https://github.com/timsaya/luci-app-bandix)
-- [luci-theme-aurora](https://github.com/eamonxg/luci-theme-aurora)
-- [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config)
+- [luci-theme-argon](https://github.com/jerrykuku/luci-theme-argon)
+- [luci-app-argon-config](https://github.com/jerrykuku/luci-app-argon-config)
 - luci-app-ttyd
 - luci-app-upnp
 - kmod-usb-net-cdc-ether

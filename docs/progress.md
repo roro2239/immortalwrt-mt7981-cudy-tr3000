@@ -7,3 +7,5 @@
 - [CHORE] 2026-03-19：在工作流环境变量中启用 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`，提前适配 GitHub Actions Node.js 24 运行时切换。
 - [FEAT] 2026-03-19：固件默认系统名改为 `CeliaWRT`，同时保留用户自定义输入能力（`firmware_name`）。
 - [FIX] 2026-03-19：为编译阶段增加每分钟心跳日志，缓解 `tools/cmake` 等长耗时阶段“无输出像卡住”的问题。
+- [UI] 2026-03-19：默认主题切换为 `luci-theme-argon`（第三方高活跃仓库），并在首次启动通过 `uci-defaults` 强制写入 `luci.main.mediaurlbase=/luci-static/argon`，避免回退到旧主题。
+- [FEAT] 2026-03-19：新增 `hostname`、`wifi_ssid_2g`、`wifi_ssid_5g` 构建输入；首次启动通过 `97-custom-naming` 把系统主机名与双频 WiFi 名称写入 UCI（默认从 `firmware_name` 自动派生）。

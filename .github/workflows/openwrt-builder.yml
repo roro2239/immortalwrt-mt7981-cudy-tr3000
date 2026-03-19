@@ -30,6 +30,21 @@ on:
         required: false
         type: string
         default: 'CeliaWRT'
+      hostname:
+        description: '系统主机名（为空跟随固件名称）'
+        required: false
+        type: string
+        default: ''
+      wifi_ssid_2g:
+        description: '2.4G WiFi 名称（为空自动用 固件名称-2.4G）'
+        required: false
+        type: string
+        default: ''
+      wifi_ssid_5g:
+        description: '5G WiFi 名称（为空自动用 固件名称-5G）'
+        required: false
+        type: string
+        default: ''
       lan_ip:
         description: '后台地址（默认 22.2.2.2）'
         required: false
@@ -94,6 +109,9 @@ on:
 env:
   DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device }}
   FIRMWARE_NAME_INPUT: ${{ github.event.inputs.firmware_name || github.event.client_payload.firmware_name || 'CeliaWRT' }}
+  HOSTNAME_INPUT: ${{ github.event.inputs.hostname || github.event.client_payload.hostname || '' }}
+  WIFI_SSID_2G_INPUT: ${{ github.event.inputs.wifi_ssid_2g || github.event.client_payload.wifi_ssid_2g || '' }}
+  WIFI_SSID_5G_INPUT: ${{ github.event.inputs.wifi_ssid_5g || github.event.client_payload.wifi_ssid_5g || '' }}
   LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '22.2.2.2' }}
   DISABLE_SYSTEM_UPDATE_INPUT: ${{ github.event.inputs.disable_system_update || 'true' }}
   ENABLE_PROXY_INPUT: ${{ github.event.inputs.enable_proxy || 'true' }}
@@ -211,6 +229,24 @@ jobs:
           FW_TAG_PREFIX=$(echo "$FW_NAME" | tr '[:space:]' '-' | tr -cd '[:alnum:]._-')
           [ -z "$FW_TAG_PREFIX" ] && FW_TAG_PREFIX="CeliaWRT"
           LAN_IP="$LAN_IP_INPUT"
+          HOSTNAME_RAW="${HOSTNAME_INPUT}"
+          WIFI_SSID_2G="${WIFI_SSID_2G_INPUT}"
+          WIFI_SSID_5G="${WIFI_SSID_5G_INPUT}"
+
+          [ -z "$HOSTNAME_RAW" ] && HOSTNAME_RAW="$FW_NAME"
+          [ -z "$WIFI_SSID_2G" ] && WIFI_SSID_2G="${FW_NAME}-2.4G"
+          [ -z "$WIFI_SSID_5G" ] && WIFI_SSID_5G="${FW_NAME}-5G"
+
+          HOSTNAME_VALUE=$(echo "$HOSTNAME_RAW" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')
+          [ -z "$HOSTNAME_VALUE" ] && HOSTNAME_VALUE="celiawrt"
+
+          escape_single_quote() {
+            printf "%s" "$1" | sed "s/'/'\\\\''/g"
+          }
+
+          HOSTNAME_ESCAPED=$(escape_single_quote "$HOSTNAME_VALUE")
+          WIFI_SSID_2G_ESCAPED=$(escape_single_quote "$WIFI_SSID_2G")
+          WIFI_SSID_5G_ESCAPED=$(escape_single_quote "$WIFI_SSID_5G")
 
           validate_ipv4() {
             local ip="$1"
@@ -232,6 +268,9 @@ jobs:
           fi
 
           echo "固件名称: $FW_NAME"
+          echo "系统主机名: $HOSTNAME_VALUE"
+          echo "2.4G WiFi 名称: $WIFI_SSID_2G"
+          echo "5G WiFi 名称: $WIFI_SSID_5G"
           echo "固件标签前缀: $FW_TAG_PREFIX"
           echo "后台地址: $LAN_IP"
           echo "禁用系统在线更新: $DISABLE_SYSTEM_UPDATE_INPUT"
@@ -299,6 +338,27 @@ jobs:
             fi
 
             mkdir -p files/etc/uci-defaults
+            printf '%s\n' \
+              '#!/bin/sh' \
+              '# 首次启动时应用系统名与 WiFi 名称。' \
+              "uci -q set system.@system[0].hostname='${HOSTNAME_ESCAPED}'" \
+              "if uci -q get wireless.default_radio0 >/dev/null; then uci -q set wireless.default_radio0.ssid='${WIFI_SSID_2G_ESCAPED}'; fi" \
+              "if uci -q get wireless.default_radio1 >/dev/null; then uci -q set wireless.default_radio1.ssid='${WIFI_SSID_5G_ESCAPED}'; fi" \
+              'uci -q commit system' \
+              'uci -q commit wireless' \
+              'rm -f /etc/uci-defaults/97-custom-naming' \
+              > files/etc/uci-defaults/97-custom-naming
+            chmod +x files/etc/uci-defaults/97-custom-naming
+
+            printf '%s\n' \
+              '#!/bin/sh' \
+              '# 首次启动时固定默认 LuCI 主题为 Argon。' \
+              "uci -q set luci.main.mediaurlbase='/luci-static/argon'" \
+              'uci -q commit luci' \
+              'rm -f /etc/uci-defaults/98-default-luci-theme' \
+              > files/etc/uci-defaults/98-default-luci-theme
+            chmod +x files/etc/uci-defaults/98-default-luci-theme
+
             printf '%s\n' \
               '#!/bin/sh' \
               '# 首次启动时应用自定义 LAN 地址，避免依赖上游 config_generate 细节。' \
