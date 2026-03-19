@@ -50,20 +50,7 @@ jobs:
           cp -a package/luci-app-button-automation /workdir/sdk/package/
 
           if [ -f /workdir/sdk/package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg ]; then
-            python3 - <<'PY'
-from pathlib import Path
-path = Path("/workdir/sdk/package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg")
-text = path.read_text(encoding="utf-8")
-text = text.replace(
-    '__exec_iwpriv_cmd(ifname, "ApCliAutoConnect", "3")',
-    '__exec_iwpriv_cmd(ifname, "ApCliAutoConnect", "1")',
-)
-text = text.replace(
-    'os.execute("startwapp.sh")',
-    'os.execute("command -v startwapp.sh >/dev/null 2>&1 && startwapp.sh || true")',
-)
-path.write_text(text, encoding="utf-8")
-PY
+            python3 -c "from pathlib import Path; p=Path('/workdir/sdk/package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg'); t=p.read_text(encoding='utf-8'); t=t.replace('__exec_iwpriv_cmd(ifname, \"ApCliAutoConnect\", \"3\")','__exec_iwpriv_cmd(ifname, \"ApCliAutoConnect\", \"1\")'); t=t.replace('os.execute(\"startwapp.sh\")','os.execute(\"command -v startwapp.sh >/dev/null 2>&1 && startwapp.sh || true\")'); p.write_text(t, encoding='utf-8')"
           fi
 
       - name: ⚙️ 更新 feeds 并编译关键包
@@ -72,10 +59,10 @@ PY
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-          cat >> .config <<'EOF'
-CONFIG_PACKAGE_mtwifi-cfg=m
-CONFIG_PACKAGE_luci-app-button-automation=m
-EOF
+          printf '%s\n' \
+            'CONFIG_PACKAGE_mtwifi-cfg=m' \
+            'CONFIG_PACKAGE_luci-app-button-automation=m' \
+            >> .config
           make defconfig
 
           CPU_THREADS="$(nproc)"
@@ -96,4 +83,3 @@ EOF
             /workdir/sdk/bin/packages/**/mtwifi-cfg*.ipk
             /workdir/sdk/bin/packages/**/luci-app-button-automation*.ipk
           if-no-files-found: warn
-
