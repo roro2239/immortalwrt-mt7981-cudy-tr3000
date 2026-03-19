@@ -1,0 +1,20 @@
+{
+  "luci-app-home-dashboard": {
+    "description": "Grant access to home dashboard",
+    "read": {
+      "ubus": {
+        "system": [
+          "board",
+          "info"
+        ],
+        "network.interface": [
+          "status"
+        ],
+        "luci": [
+          "getETHInfo",
+          "getTempInfo"
+        ]
+      }
+    }
+  }
+}

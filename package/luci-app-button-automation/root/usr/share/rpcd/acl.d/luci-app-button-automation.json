@@ -6,13 +6,6 @@
         "system": [
           "board",
           "info"
-        ],
-        "network.interface": [
-          "status"
-        ],
-        "luci": [
-          "getETHInfo",
-          "getTempInfo"
         ]
       },
       "uci": [

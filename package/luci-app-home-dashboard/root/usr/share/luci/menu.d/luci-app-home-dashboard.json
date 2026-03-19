@@ -1,0 +1,13 @@
+{
+  "admin/status/overview": {
+    "title": "首页",
+    "order": 1,
+    "action": {
+      "type": "view",
+      "path": "status/home-dashboard"
+    },
+    "depends": {
+      "acl": [ "luci-app-home-dashboard" ]
+    }
+  }
+}
