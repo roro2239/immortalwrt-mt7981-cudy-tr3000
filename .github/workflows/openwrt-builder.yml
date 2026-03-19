@@ -1,4 +1,4 @@
-name: ImmortalWrt 编译
+name: ImmortalWrt 全量编译
 
 permissions:
   contents: write
@@ -234,8 +234,8 @@ jobs:
           WIFI_SSID_5G="${WIFI_SSID_5G_INPUT}"
 
           [ -z "$HOSTNAME_RAW" ] && HOSTNAME_RAW="$FW_NAME"
-          [ -z "$WIFI_SSID_2G" ] && WIFI_SSID_2G="${FW_NAME}-2.4G"
-          [ -z "$WIFI_SSID_5G" ] && WIFI_SSID_5G="${FW_NAME}-5G"
+          [ -z "$WIFI_SSID_2G" ] && WIFI_SSID_2G="${HOSTNAME_RAW}-2.4G"
+          [ -z "$WIFI_SSID_5G" ] && WIFI_SSID_5G="${HOSTNAME_RAW}-5G"
 
           HOSTNAME_VALUE=$(echo "$HOSTNAME_RAW" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')
           [ -z "$HOSTNAME_VALUE" ] && HOSTNAME_VALUE="celiawrt"
@@ -390,7 +390,7 @@ jobs:
               'idx=0' \
               'for section in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do' \
               '  mode=$(uci -q get wireless.${section}.mode)' \
-              '  [ "$mode" = "ap" ] || continue' \
+              '  if [ -n "$mode" ] && [ "$mode" != "ap" ]; then continue; fi' \
               '  if [ "$idx" -eq 0 ]; then' \
               "    uci -q set wireless.\${section}.ssid='${WIFI_SSID_2G_ESCAPED}'" \
               '    logger -t custom-naming "set 2.4G ssid on section=${section}"' \

@@ -1,4 +1,4 @@
-name: ImmortalWrt 复用快速验证
+name: ImmortalWrt 快速编译
 
 permissions:
   contents: read

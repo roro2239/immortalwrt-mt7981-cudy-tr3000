@@ -1,4 +1,4 @@
-name: 798x U-Boot 编译
+name: U-Boot 编译
 
 on:
   workflow_dispatch:
