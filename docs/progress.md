@@ -15,3 +15,5 @@
 - [FIX] 2026-03-19：修复 WiFi 名称未生效。`97-custom-naming` 在保留 `default_radio0/1` 写法的同时，新增对 `wireless.*=wifi-iface` 的 AP 段遍历兜底写入，兼容非标准无线 section 命名。
 - [FIX] 2026-03-19：针对 TR3000（256M）无线扫描卡顿，构建阶段补丁 `mtwifi_cfg`：将 `ApCliAutoConnect` 从 `3`（驱动触发扫描）调整为 `1`（用户触发扫描），并将 `startwapp.sh` 调用改为“存在才执行”，消除缺失脚本告警。
 - [FIX] 2026-03-19：新增首启脚本 `96-mtwifi-stability`：将 2.4G 自动信道固定为 `11`、5G 自动信道固定为 `36`、`HE160` 降为 `HE80`，并默认禁用 `sta/wwan` 自动拉起，降低 `AP Beacon OFF` 与扫描风暴概率。
+- [PERF] 2026-03-19：新增 `openwrt-fast-builder.yml` 快速验证工作流，仅编译关键包（`mtwifi-cfg`、`luci-app-button-automation`）用于日常修 Bug 回归，避免每次都跑全量固件。
+- [PERF] 2026-03-19：全量工作流 `toolchain/host` 缓存键从“绑定 `config/*.config`”调整为“仅绑定分支”，降低配置微调导致的缓存失效概率。

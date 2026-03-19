@@ -1,0 +1,143 @@
+name: ImmortalWrt 快速验证
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: '指定源码仓库地址'
+        required: true
+        type: string
+        default: 'https://github.com/padavanonly/immortalwrt-mt798x-6.6'
+      commit:
+        description: '指定源码commit进行验证，留空拉取最新源码'
+        required: false
+        type: string
+        default: ''
+      disable_system_update:
+        description: '是否禁用系统在线更新（保持与全量构建一致）'
+        required: false
+        type: boolean
+        default: true
+      enable_istore:
+        description: '是否启用 iStore（保持与全量构建一致）'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  REPO_URL: ${{ github.event.inputs.repo }}
+  REPO_BRANCH: openwrt-24.10-6.6
+  REPO_COMMIT: ${{ github.event.inputs.commit }}
+  FEEDS_CONF: feeds.conf.default
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  DISABLE_SYSTEM_UPDATE_INPUT: ${{ github.event.inputs.disable_system_update || 'true' }}
+  ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'true' }}
+  CCACHE_DIR: /workdir/.ccache
+  CCACHE_MAXSIZE: 20G
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  TZ: Asia/Shanghai
+
+jobs:
+  fast-verify:
+    name: ⚡ 快速验证关键包
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 🙌 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🛠️ 初始化环境
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: 🪜 克隆源码
+        working-directory: /workdir
+        run: |
+          git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
+          if [ -n "${REPO_COMMIT}" ]; then
+            cd openwrt && git checkout ${REPO_COMMIT}
+          fi
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+      - name: ⚙️ 缓存 ccache
+        uses: actions/cache@v4
+        with:
+          path: /workdir/.ccache
+          key: ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ hashFiles('config/*.config') }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-
+
+      - name: ⚙️ 缓存 dl 下载目录
+        uses: actions/cache@v4
+        with:
+          path: /workdir/openwrt/dl
+          key: ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-dl-
+
+      - name: ⚙️ 缓存 toolchain 与 host 构建产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt/staging_dir/host
+            /workdir/openwrt/staging_dir/hostpkg
+            /workdir/openwrt/staging_dir/toolchain-*
+          key: ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}-
+
+      - name: 🔧 设置 ccache
+        run: |
+          ccache --set-config=max_size=$CCACHE_MAXSIZE
+          ccache --set-config=cache_dir=$CCACHE_DIR
+          ccache --set-config=compression=true
+          ccache --set-config=compiler_check=content
+          ccache --set-config=sloppiness=file_macro,time_macros
+          ccache -z
+
+      - name: 🧬 更新并安装 feeds
+        run: |
+          cd openwrt
+          [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && mv $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
+          chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
+          export ISTORE_ENABLE="$ISTORE_ENABLE_INPUT"
+          $GITHUB_WORKSPACE/$DIY_P1_SH
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
+          export DISABLE_SYSTEM_UPDATE="$DISABLE_SYSTEM_UPDATE_INPUT"
+          $GITHUB_WORKSPACE/$DIY_P2_SH
+
+      - name: ⚡ 编译关键包
+        run: |
+          cd /workdir/openwrt
+          cp -f $GITHUB_WORKSPACE/config/256m.config .config
+          make defconfig
+
+          CPU_THREADS="$(nproc)"
+          BUILD_JOBS="$((CPU_THREADS + 1))"
+          BUILD_LOAD="$CPU_THREADS"
+
+          make package/mtk/applications/mtwifi-cfg/clean
+          make package/mtk/applications/mtwifi-cfg/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
+
+          make package/luci-app-button-automation/clean
+          make package/luci-app-button-automation/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
+
+      - name: 📦 上传 ipk（若存在）
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-verify-ipk
+          path: |
+            /workdir/openwrt/bin/packages/**/mtwifi-cfg*.ipk
+            /workdir/openwrt/bin/packages/**/luci-app-button-automation*.ipk
+          if-no-files-found: warn
+

@@ -195,7 +195,7 @@ jobs:
             /workdir/openwrt/staging_dir/host
             /workdir/openwrt/staging_dir/hostpkg
             /workdir/openwrt/staging_dir/toolchain-*
-          key: ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}-${{ hashFiles('config/*.config') }}
+          key: ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}
           restore-keys: |
             ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}-
 
