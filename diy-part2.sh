@@ -158,35 +158,6 @@ path.write_text(text, encoding="utf-8")
 PY
 fi
 
-# 禁用“系统在线更新”（隐藏菜单并移除对应 ACL）
-if [ "${DISABLE_SYSTEM_UPDATE:-true}" = "true" ]; then
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-targets = [
-    (
-        Path("feeds/luci/modules/luci-mod-system/root/usr/share/luci/menu.d/luci-mod-system.json"),
-        "admin/system/flash",
-    ),
-    (
-        Path("feeds/luci/modules/luci-mod-system/root/usr/share/rpcd/acl.d/luci-mod-system.json"),
-        "luci-mod-system-flash",
-    ),
-]
-
-for path, key in targets:
-    if not path.exists():
-        continue
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if key in data:
-        data.pop(key)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-PY
-else
-  echo "保留系统在线更新"
-fi
-
 # add date in output file name
 sed -i -e '/^IMG_PREFIX:=/i BUILD_DATE := $(shell date +%Y%m%d)' \
        -e '/^IMG_PREFIX:=/ s/\($(SUBTARGET)\)/\1-$(BUILD_DATE)/' include/image.mk
