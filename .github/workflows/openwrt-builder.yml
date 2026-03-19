@@ -26,10 +26,10 @@ on:
         type: string
         default: ''
       firmware_name:
-        description: '固件名称（为空默认 ImmortalWrt）'
+        description: '固件名称（为空默认 CeliaWRT）'
         required: false
         type: string
-        default: ''
+        default: 'CeliaWRT'
       lan_ip:
         description: '后台地址（默认 22.2.2.2）'
         required: false
@@ -93,7 +93,7 @@ on:
 
 env:
   DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device }}
-  FIRMWARE_NAME_INPUT: ${{ github.event.inputs.firmware_name || '' }}
+  FIRMWARE_NAME_INPUT: ${{ github.event.inputs.firmware_name || github.event.client_payload.firmware_name || 'CeliaWRT' }}
   LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '22.2.2.2' }}
   DISABLE_SYSTEM_UPDATE_INPUT: ${{ github.event.inputs.disable_system_update || 'true' }}
   ENABLE_PROXY_INPUT: ${{ github.event.inputs.enable_proxy || 'true' }}
@@ -188,9 +188,9 @@ jobs:
         id: compile
         run: |
           FW_NAME="${FIRMWARE_NAME_INPUT}"
-          [ -z "$FW_NAME" ] && FW_NAME="ImmortalWrt"
+          [ -z "$FW_NAME" ] && FW_NAME="CeliaWRT"
           FW_TAG_PREFIX=$(echo "$FW_NAME" | tr '[:space:]' '-' | tr -cd '[:alnum:]._-')
-          [ -z "$FW_TAG_PREFIX" ] && FW_TAG_PREFIX="ImmortalWrt"
+          [ -z "$FW_TAG_PREFIX" ] && FW_TAG_PREFIX="CeliaWRT"
           LAN_IP="$LAN_IP_INPUT"
 
           validate_ipv4() {
