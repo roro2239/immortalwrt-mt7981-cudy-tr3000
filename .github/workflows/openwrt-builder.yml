@@ -30,8 +30,13 @@ on:
         required: false
         type: string
         default: ''
+      lan_ip:
+        description: '后台地址（默认 22.2.2.2）'
+        required: false
+        type: string
+        default: '22.2.2.2'
       package_preset:
-        description: '预设包方案（中文）'
+        description: '预设包方案'
         required: false
         type: choice
         default: '全量'
@@ -69,6 +74,7 @@ on:
 env:
   DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device }}
   FIRMWARE_NAME_INPUT: ${{ github.event.inputs.firmware_name || '' }}
+  LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '22.2.2.2' }}
   PACKAGE_PRESET_INPUT: ${{ github.event.inputs.package_preset || '全量' }}
   ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'true' }}
   EXTRA_PACKAGES_INPUT: ${{ github.event.inputs.extra_packages || '' }}
@@ -158,8 +164,30 @@ jobs:
           [ -z "$FW_NAME" ] && FW_NAME="ImmortalWrt"
           FW_TAG_PREFIX=$(echo "$FW_NAME" | tr '[:space:]' '-' | tr -cd '[:alnum:]._-')
           [ -z "$FW_TAG_PREFIX" ] && FW_TAG_PREFIX="ImmortalWrt"
+          LAN_IP="$LAN_IP_INPUT"
+
+          validate_ipv4() {
+            local ip="$1"
+            local IFS='.'
+            local -a octets=()
+
+            read -r -a octets <<< "$ip"
+            [ "${#octets[@]}" -eq 4 ] || return 1
+
+            for octet in "${octets[@]}"; do
+              [[ "$octet" =~ ^[0-9]+$ ]] || return 1
+              [ "$octet" -ge 0 ] && [ "$octet" -le 255 ] || return 1
+            done
+          }
+
+          if ! validate_ipv4 "$LAN_IP"; then
+            echo "❌ 非法后台地址: $LAN_IP"
+            exit 1
+          fi
+
           echo "固件名称: $FW_NAME"
           echo "固件标签前缀: $FW_TAG_PREFIX"
+          echo "后台地址: $LAN_IP"
           echo "预设包方案: $PACKAGE_PRESET_INPUT"
           echo "启用 iStore: $ISTORE_ENABLE_INPUT"
           echo "fw_name=$FW_NAME" >> $GITHUB_OUTPUT
@@ -221,6 +249,21 @@ jobs:
             # 3. 加载配置
             cp -f $GITHUB_WORKSPACE/$CONFIG .config
             echo "CONFIG_VERSION_DIST=\"$FW_NAME\"" >> .config
+            if grep -q '^CONFIG_TARGET_PREINIT_IP=' .config; then
+              sed -i -E "s@^CONFIG_TARGET_PREINIT_IP=.*@CONFIG_TARGET_PREINIT_IP=\"${LAN_IP}\"@" .config
+            else
+              echo "CONFIG_TARGET_PREINIT_IP=\"${LAN_IP}\"" >> .config
+            fi
+
+            if [ ! -f package/base-files/files/bin/config_generate ]; then
+              echo "❌ 未找到配置文件: package/base-files/files/bin/config_generate"
+              exit 1
+            fi
+            sed -i -E "s@(set network\\.lan\\.ipaddr=')[^']*(')@\\1${LAN_IP}\\2@" package/base-files/files/bin/config_generate
+            if ! grep -Fq "set network.lan.ipaddr='${LAN_IP}'" package/base-files/files/bin/config_generate; then
+              echo "❌ 后台地址写入失败: $LAN_IP"
+              exit 1
+            fi
 
             ENABLE_PKGS="$FORCED_ADD $PRESET_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT")"
             DISABLE_PKGS="$FORCED_REMOVE $PRESET_REMOVE $(normalize_packages "$REMOVE_PACKAGES_INPUT")"
