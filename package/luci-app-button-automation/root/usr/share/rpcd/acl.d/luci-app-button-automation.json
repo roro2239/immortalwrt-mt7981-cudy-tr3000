@@ -2,11 +2,32 @@
   "luci-app-button-automation": {
     "description": "Grant access to button automation settings",
     "read": {
+      "ubus": {
+        "system": [
+          "board",
+          "info"
+        ]
+      },
       "uci": [
         "button_automation",
         "wireless"
       ],
       "file": {
+        "/etc/config/button_automation": [
+          "read"
+        ],
+        "/proc/loadavg": [
+          "read"
+        ],
+        "/proc/meminfo": [
+          "read"
+        ],
+        "/proc/net/route": [
+          "read"
+        ],
+        "/proc/uptime": [
+          "read"
+        ],
         "/tmp/button-automation/events.log": [
           "read"
         ]
@@ -17,6 +38,9 @@
         "button_automation"
       ],
       "file": {
+        "/bin/ping": [
+          "exec"
+        ],
         "/tmp/button-automation/events.log": [
           "write"
         ]
