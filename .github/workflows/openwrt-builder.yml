@@ -105,7 +105,7 @@ env:
   EXTRA_PACKAGES_INPUT: ${{ github.event.inputs.extra_packages || '' }}
   REMOVE_PACKAGES_INPUT: ${{ github.event.inputs.remove_packages || '' }}
   CCACHE_DIR: /workdir/.ccache
-  CCACHE_MAXSIZE: 2G
+  CCACHE_MAXSIZE: 20G
   REPO_URL: ${{ github.event.inputs.repo || github.event.client_payload.repo }}
   REPO_BRANCH: openwrt-24.10-6.6
   REPO_COMMIT: ${{ github.event.inputs.commit || github.event.client_payload.commit }}
@@ -154,21 +154,40 @@ jobs:
           fi
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: ⚙️ 配置 ccache 与下载缓存
+      - name: ⚙️ 缓存 ccache
+        uses: actions/cache@v4
+        with:
+          path: /workdir/.ccache
+          key: ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-${{ hashFiles('config/*.config') }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-
+
+      - name: ⚙️ 缓存 dl 下载目录
+        uses: actions/cache@v4
+        with:
+          path: /workdir/openwrt/dl
+          key: ${{ runner.os }}-openwrt-dl-${{ env.REPO_BRANCH }}
+          restore-keys: |
+            ${{ runner.os }}-openwrt-dl-
+
+      - name: ⚙️ 缓存 toolchain 与 host 构建产物
         uses: actions/cache@v4
         with:
           path: |
-            /workdir/.ccache
-            /workdir/openwrt/dl
-          key: ${{ runner.os }}-openwrt-combined-${{ env.REPO_BRANCH }}-${{ hashFiles('config/*.config') }}
+            /workdir/openwrt/staging_dir/host
+            /workdir/openwrt/staging_dir/hostpkg
+            /workdir/openwrt/staging_dir/toolchain-*
+          key: ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}-${{ hashFiles('config/*.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-combined-${{ env.REPO_BRANCH }}-
+            ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}-
 
       - name: 🔧 设置 ccache
         run: |
           ccache --set-config=max_size=$CCACHE_MAXSIZE
           ccache --set-config=cache_dir=$CCACHE_DIR
           ccache --set-config=compression=true
+          ccache --set-config=compiler_check=content
+          ccache --set-config=sloppiness=file_macro,time_macros
           ccache -z
 
       - name: 🧬 更新并安装 feeds
@@ -313,7 +332,15 @@ jobs:
               fi
             done
 
-            make download -j$(nproc)
+            CPU_THREADS="$(nproc)"
+            BUILD_JOBS="$((CPU_THREADS + 1))"
+            BUILD_LOAD="$CPU_THREADS"
+
+            echo "CPU 线程数: ${CPU_THREADS}"
+            echo "并发任务数: ${BUILD_JOBS}"
+            echo "负载上限: ${BUILD_LOAD}"
+
+            make download -j"${BUILD_JOBS}"
             
             # 5. 开始编译
             # 使用 ccache 加速，并保留 Toolchain；心跳日志避免长时间无输出。
@@ -336,7 +363,7 @@ jobs:
             }
 
             start_heartbeat
-            if ! make -j$(nproc) CC="ccache gcc" CXX="ccache g++"; then
+            if ! make -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" CC="ccache gcc" CXX="ccache g++"; then
               stop_heartbeat
               echo "⚠️ 多线程构建失败，回退到单线程重试..."
               start_heartbeat
