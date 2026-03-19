@@ -50,11 +50,6 @@ on:
         required: false
         type: string
         default: '22.2.2.2'
-      disable_system_update:
-        description: '是否禁用系统在线更新'
-        required: false
-        type: boolean
-        default: true
       enable_proxy:
         description: '是否启用代理（OpenClash）'
         required: false
@@ -106,6 +101,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: full-build-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device }}
   FIRMWARE_NAME_INPUT: ${{ github.event.inputs.firmware_name || github.event.client_payload.firmware_name || 'CeliaWRT' }}
@@ -113,7 +112,6 @@ env:
   WIFI_SSID_2G_INPUT: ${{ github.event.inputs.wifi_ssid_2g || github.event.client_payload.wifi_ssid_2g || '' }}
   WIFI_SSID_5G_INPUT: ${{ github.event.inputs.wifi_ssid_5g || github.event.client_payload.wifi_ssid_5g || '' }}
   LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '22.2.2.2' }}
-  DISABLE_SYSTEM_UPDATE_INPUT: ${{ github.event.inputs.disable_system_update || 'true' }}
   ENABLE_PROXY_INPUT: ${{ github.event.inputs.enable_proxy || 'true' }}
   ENABLE_TTYD_INPUT: ${{ github.event.inputs.enable_ttyd || 'true' }}
   ENABLE_UPNP_INPUT: ${{ github.event.inputs.enable_upnp || 'true' }}
@@ -137,14 +135,14 @@ env:
 
 jobs:
   build:
-    name: 🔨 构建固件
+    name: 构建固件
     runs-on: ubuntu-22.04
     
     steps:
-      - name: 🙌 检出代码
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 🪠 释放磁盘空间
+      - name: 释放磁盘空间
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
@@ -155,15 +153,15 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: 🛠️ 初始化环境
+      - name: 初始化环境
         run: |
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm mkisofs ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs unzip wget xmlto zlib1g-dev zstd
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
-      - name: 🪜 克隆源码
+      - name: 克隆源码
         working-directory: /workdir
         run: |
           git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
@@ -172,7 +170,7 @@ jobs:
           fi
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: ⚙️ 缓存 ccache
+      - name: 缓存 ccache
         uses: actions/cache@v4
         with:
           path: /workdir/.ccache
@@ -180,7 +178,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-
 
-      - name: ⚙️ 缓存 dl 下载目录
+      - name: 缓存 dl 下载目录
         uses: actions/cache@v4
         with:
           path: /workdir/openwrt/dl
@@ -188,7 +186,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-dl-
 
-      - name: ⚙️ 缓存 toolchain 与 host 构建产物
+      - name: 缓存 toolchain 与 host 构建产物
         uses: actions/cache@v4
         with:
           path: |
@@ -199,7 +197,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}-
 
-      - name: 🔧 设置 ccache
+      - name: 设置 ccache
         run: |
           ccache --set-config=max_size=$CCACHE_MAXSIZE
           ccache --set-config=cache_dir=$CCACHE_DIR
@@ -208,7 +206,7 @@ jobs:
           ccache --set-config=sloppiness=file_macro,time_macros
           ccache -z
 
-      - name: 🧬 更新并安装 feeds
+      - name: 更新并安装 feeds
         run: |
           cd openwrt
           [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && mv $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
@@ -218,10 +216,9 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
-          export DISABLE_SYSTEM_UPDATE="$DISABLE_SYSTEM_UPDATE_INPUT"
           $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      - name: 🔨 构建 256M 固件
+      - name: 构建 256M 固件
         id: compile
         run: |
           FW_NAME="${FIRMWARE_NAME_INPUT}"
@@ -263,7 +260,7 @@ jobs:
           }
 
           if ! validate_ipv4 "$LAN_IP"; then
-            echo "❌ 非法后台别名地址: $LAN_IP"
+            echo "非法后台别名地址: $LAN_IP"
             exit 1
           fi
 
@@ -273,7 +270,6 @@ jobs:
           echo "5G WiFi 名称: $WIFI_SSID_5G"
           echo "固件标签前缀: $FW_TAG_PREFIX"
           echo "后台别名地址: $LAN_IP"
-          echo "禁用系统在线更新: $DISABLE_SYSTEM_UPDATE_INPUT"
           echo "启用代理(OpenClash): $ENABLE_PROXY_INPUT"
           echo "启用终端(ttyd): $ENABLE_TTYD_INPUT"
           echo "启用UPnP: $ENABLE_UPNP_INPUT"
@@ -289,7 +285,7 @@ jobs:
 
           validate_package_name() {
             if [[ ! "$1" =~ ^[A-Za-z0-9._+-]+$ ]]; then
-              echo "❌ 非法包名: $1"
+                echo "非法包名: $1"
               exit 1
             fi
           }
@@ -322,7 +318,7 @@ jobs:
           cd /workdir/openwrt
 
           for DEV in $DEVICES; do
-            echo "::group::🚀 开始构建 $DEV"
+            echo "::group::开始构建 $DEV"
             
             CONFIG="config/256m.config"
             
@@ -452,27 +448,32 @@ jobs:
             for PKG in $TOGGLE_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT"); do
               validate_package_name "$PKG"
               if ! grep -Eq "^CONFIG_PACKAGE_${PKG}=(y|m)$" .config; then
-                echo "❌ 包不可用或未被启用: $PKG"
+                  echo "包不可用或未被启用: $PKG"
                 exit 1
               fi
             done
 
             CPU_THREADS="$(nproc)"
-            BUILD_JOBS="$((CPU_THREADS + 1))"
-            BUILD_LOAD="$CPU_THREADS"
+            BUILD_JOBS="$((CPU_THREADS * 2))"
+            BUILD_LOAD="$((CPU_THREADS * 2))"
+            [ "$BUILD_JOBS" -lt 4 ] && BUILD_JOBS=4
+            [ "$BUILD_LOAD" -lt 4 ] && BUILD_LOAD=4
 
             echo "CPU 线程数: ${CPU_THREADS}"
             echo "并发任务数: ${BUILD_JOBS}"
             echo "负载上限: ${BUILD_LOAD}"
 
-            make download -j"${BUILD_JOBS}"
+            if ! make download -j"${BUILD_JOBS}"; then
+              echo "下载阶段高并发失败，回退低并发重试"
+              make download -j4 V=s
+            fi
             
             # 5. 开始编译
             # 使用 ccache 加速，并保留 Toolchain；心跳日志避免长时间无输出。
             start_heartbeat() {
               (
                 while true; do
-                  echo "⏳ 编译进行中: $(date '+%F %T')"
+                  echo "编译进行中: $(date '+%F %T')"
                   sleep 60
                 done
               ) &
@@ -490,7 +491,7 @@ jobs:
             start_heartbeat
             if ! make -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" CC="ccache gcc" CXX="ccache g++"; then
               stop_heartbeat
-              echo "⚠️ 多线程构建失败，回退到单线程重试..."
+              echo "多线程构建失败，回退到单线程重试"
               start_heartbeat
               if ! make -j1 V=s; then
                 stop_heartbeat
@@ -499,24 +500,24 @@ jobs:
             fi
             stop_heartbeat
 
-            echo "✅ $DEV 构建完成。"
+            echo "$DEV 构建完成"
             df -hT /workdir
             echo "::endgroup::"
           done
 
-          echo "📥 正在收集产物"
+          echo "正在收集产物"
           find bin/targets/ -name "*sysupgrade.bin" -exec cp {} $GITHUB_WORKSPACE/firmware_collection/ \;
 
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: 🪄 上传二进制产物
+      - name: 上传二进制产物
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success'
         with:
           name: ${{ steps.compile.outputs.fw_tag_prefix }}_Combined_${{ env.DEVICE_INPUT }}_${{ env.REPO_BRANCH }}
           path: ${{ github.workspace }}/firmware_collection/*
 
-      - name: 📌 生成发布标签
+      - name: 生成发布标签
         id: tag
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
         env:
@@ -528,15 +529,15 @@ jobs:
           echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
           cat > release.txt << EOF
-          ## 📦 ${FW_NAME} 固件发布
+          ## ${FW_NAME} 固件发布
 
-          **🏷️ 版本标签:** $RELEASE_TAG
-          **🌿 分支:** $REPO_BRANCH
-          **📱 设备:** ${DEVICE_INPUT}
-          **📅 构建时间:** $(date +"%Y-%m-%d %H:%M:%S")
-          **🔨 编译器:** GCC + ccache
+          **版本标签:** $RELEASE_TAG
+          **分支:** $REPO_BRANCH
+          **设备:** ${DEVICE_INPUT}
+          **构建时间:** $(date +"%Y-%m-%d %H:%M:%S")
+          **编译器:** GCC + ccache
 
-          ## 📥 下载
+          ## 下载
 
           请从下方附件下载固件文件。
 
@@ -547,7 +548,7 @@ jobs:
 
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: 📤 上传到发行版
+      - name: 上传到发行版
         uses: softprops/action-gh-release@v2
         if: steps.tag.outputs.status == 'success'
         with:
@@ -556,7 +557,7 @@ jobs:
           prerelease: ${{ env.PRERELEASE == 'true' }}
           files: ${{ github.workspace }}/firmware_collection/*
 
-      - name: 🚧 删除旧工作流运行记录
+      - name: 删除旧工作流运行记录
         uses: Mattraks/delete-workflow-runs@v2
         with:
           retain_days: 0

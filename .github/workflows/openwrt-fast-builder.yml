@@ -16,11 +16,6 @@ on:
         required: false
         type: string
         default: ''
-      disable_system_update:
-        description: '是否禁用系统在线更新（保持与全量构建一致）'
-        required: false
-        type: boolean
-        default: true
       enable_istore:
         description: '是否启用 iStore（保持与全量构建一致）'
         required: false
@@ -36,6 +31,15 @@ on:
         required: false
         type: string
         default: ''
+      skip_feeds_update:
+        description: '是否只更新必要 feeds（默认开启以加速）'
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: fast-build-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REPO_URL: ${{ github.event.inputs.repo }}
@@ -44,10 +48,10 @@ env:
   FEEDS_CONF: feeds.conf.default
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  DISABLE_SYSTEM_UPDATE_INPUT: ${{ github.event.inputs.disable_system_update || 'true' }}
   ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'true' }}
   MTWIFI_PKG_RELEASE_INPUT: ${{ github.event.inputs.mtwifi_pkg_release || '1' }}
   ARTIFACT_TAG_INPUT: ${{ github.event.inputs.artifact_tag || '' }}
+  SKIP_FEEDS_UPDATE_INPUT: ${{ github.event.inputs.skip_feeds_update || 'true' }}
   CCACHE_DIR: /workdir/.ccache
   CCACHE_MAXSIZE: 20G
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -55,22 +59,22 @@ env:
 
 jobs:
   fast-verify:
-    name: ⚡ 复用缓存快速验证
+    name: 快速编译
     runs-on: ubuntu-22.04
 
     steps:
-      - name: 🙌 检出代码
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 🛠️ 初始化环境
+      - name: 初始化环境
         run: |
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm mkisofs ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs unzip wget xmlto zlib1g-dev zstd
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
-      - name: 🪜 克隆源码
+      - name: 克隆源码
         working-directory: /workdir
         run: |
           git clone $REPO_URL -b $REPO_BRANCH --single-branch --filter=blob:none openwrt
@@ -79,7 +83,7 @@ jobs:
           fi
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: ⚙️ 缓存 ccache
+      - name: 缓存 ccache
         uses: actions/cache@v4
         with:
           path: /workdir/.ccache
@@ -87,7 +91,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-ccache-${{ env.REPO_BRANCH }}-
 
-      - name: ⚙️ 缓存 dl 下载目录
+      - name: 缓存 dl 下载目录
         uses: actions/cache@v4
         with:
           path: /workdir/openwrt/dl
@@ -95,7 +99,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-dl-
 
-      - name: ⚙️ 缓存 toolchain 与 host 构建产物
+      - name: 缓存 toolchain 与 host 构建产物
         uses: actions/cache@v4
         with:
           path: |
@@ -106,7 +110,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}-
 
-      - name: 🔧 设置 ccache
+      - name: 设置 ccache
         run: |
           ccache --set-config=max_size=$CCACHE_MAXSIZE
           ccache --set-config=cache_dir=$CCACHE_DIR
@@ -115,48 +119,52 @@ jobs:
           ccache --set-config=sloppiness=file_macro,time_macros
           ccache -z
 
-      - name: 🧬 更新并安装 feeds
+      - name: 更新并安装 feeds
         run: |
           cd openwrt
           [ -e $GITHUB_WORKSPACE/$FEEDS_CONF ] && mv $GITHUB_WORKSPACE/$FEEDS_CONF feeds.conf.default
           chmod +x $GITHUB_WORKSPACE/$DIY_P1_SH
           export ISTORE_ENABLE="$ISTORE_ENABLE_INPUT"
           $GITHUB_WORKSPACE/$DIY_P1_SH
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          if [ "$SKIP_FEEDS_UPDATE_INPUT" = "true" ]; then
+            ./scripts/feeds update packages luci
+            ./scripts/feeds install -a -p packages
+            ./scripts/feeds install -a -p luci
+          else
+            ./scripts/feeds update -a
+            ./scripts/feeds install -a
+          fi
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
-          export DISABLE_SYSTEM_UPDATE="$DISABLE_SYSTEM_UPDATE_INPUT"
           $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      - name: ⚡ 编译关键包
+      - name: 编译关键包
         run: |
           cd /workdir/openwrt
           MTWIFI_REL="$MTWIFI_PKG_RELEASE_INPUT"
           if ! echo "$MTWIFI_REL" | grep -Eq '^[0-9]+$'; then
-            echo "❌ mtwifi_pkg_release 必须是数字，当前: $MTWIFI_REL"
+            echo "mtwifi_pkg_release 必须是数字，当前: $MTWIFI_REL"
             exit 1
           fi
 
           MTWIFI_MK="package/mtk/applications/mtwifi-cfg/Makefile"
           if [ -f "$MTWIFI_MK" ]; then
             sed -i -E "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${MTWIFI_REL}/" "$MTWIFI_MK"
-            echo "✅ mtwifi-cfg PKG_RELEASE 已设置为 ${MTWIFI_REL}"
+            echo "mtwifi-cfg PKG_RELEASE 已设置为 ${MTWIFI_REL}"
           fi
 
           cp -f $GITHUB_WORKSPACE/config/256m.config .config
           make defconfig
 
           CPU_THREADS="$(nproc)"
-          BUILD_JOBS="$((CPU_THREADS + 1))"
-          BUILD_LOAD="$CPU_THREADS"
+          BUILD_JOBS="$((CPU_THREADS * 2))"
+          BUILD_LOAD="$((CPU_THREADS * 2))"
+          [ "$BUILD_JOBS" -lt 4 ] && BUILD_JOBS=4
+          [ "$BUILD_LOAD" -lt 4 ] && BUILD_LOAD=4
 
-          make package/mtk/applications/mtwifi-cfg/clean
-          make package/mtk/applications/mtwifi-cfg/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
+          make package/mtk/applications/mtwifi-cfg/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
+          make package/luci-app-button-automation/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
 
-          make package/luci-app-button-automation/clean
-          make package/luci-app-button-automation/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
-
-      - name: 📦 上传 ipk（若存在）
+      - name: 上传 ipk（若存在）
         uses: actions/upload-artifact@v4
         with:
           name: fast-verify-ipk-${{ env.ARTIFACT_TAG_INPUT || env.MTWIFI_PKG_RELEASE_INPUT }}

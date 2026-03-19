@@ -14,6 +14,10 @@ on:
         type: string
         default: 'master'
 
+concurrency:
+  group: uboot-build-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
   WRT_REPO: https://github.com/weekdaycare/bl-mt798x-dhcpd
@@ -27,36 +31,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出项目
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
-      - name: ⚙️ 初始化环境
+      - name: 初始化环境
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt -yqq purge firefox
           sudo -E apt -yqq update
-          sudo -E apt -yqq full-upgrade
-          sudo -E apt -yqq autoremove --purge
-          sudo -E apt -yqq autoclean
-          sudo -E apt -yqq clean
           sudo -E apt -yqq install dos2unix bison build-essential device-tree-compiler flex gcc-aarch64-linux-gnu libssl-dev qemu-user-static
-          sudo -E systemctl daemon-reload
           sudo -E timedatectl set-timezone "Asia/Shanghai"
 
           sudo mkdir -p /mnt/build_wrt
           sudo chown $USER:$USER /mnt/build_wrt
           sudo ln -s /mnt/build_wrt $GITHUB_WORKSPACE/wrt
 
-      - name: ⬇️ 克隆源码
+      - name: 克隆源码
         run: |
           git clone --depth=1 --single-branch --branch $WRT_BRANCH $WRT_REPO ./wrt/
 
-      - name: 🛠️ 编译固件
+      - name: 编译固件
         run: |
           cd ./wrt/
           SOC=mt7981 BOARD=cudy_tr3000-v1-256mb VERSION=2025 MULTI_LAYOUT=0 ./build.sh
 
-      - name: 📦 打包固件
+      - name: 打包固件
         run: |
           cd ./wrt/ && mkdir -p ./upload/
 
@@ -71,7 +69,7 @@ jobs:
             mv -f "$FILE" "./upload/$NEW_FILE"
           done
 
-      - name: 📌 生成发布标签
+      - name: 生成发布标签
         id: tag
         run: |
           BUILD_TIME=$(date +"%Y%m%d-%H%M")
@@ -80,21 +78,21 @@ jobs:
 
           # 生成 release 信息
           cat > release.txt << EOF
-          ## 📦 U-Boot 固件发布
+          ## U-Boot 固件发布
 
-          **🏷️ 版本标签:** $RELEASE_TAG
-          **📦 源码仓库:** $WRT_REPO
-          **🌿 分支:** $WRT_BRANCH
-          **📱 ATF:** atf-20250711
-          **📱 MTK:** uboot-mtk-20250711
-          **📱 设备:** cudy_tr3000 256M
-          **📅 构建时间:** $BUILD_TIME
+          **版本标签:** $RELEASE_TAG
+          **源码仓库:** $WRT_REPO
+          **分支:** $WRT_BRANCH
+          **ATF:** atf-20250711
+          **MTK:** uboot-mtk-20250711
+          **设备:** cudy_tr3000 256M
+          **构建时间:** $BUILD_TIME
 
-          ## 📥 下载
+          ## 下载
 
           请从下方附件下载固件文件。
 
-          ## 🚧 说明
+          ## 说明
 
           该固件为 DHCP uboot，256M uboot 为单分区布局。
 
@@ -105,7 +103,7 @@ jobs:
 
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: 📤 上传固件到发行版
+      - name: 上传固件到发行版
         uses: softprops/action-gh-release@v2
         if: steps.tag.outputs.status == 'success' && !cancelled()
         env:
