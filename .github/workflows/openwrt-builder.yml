@@ -46,7 +46,7 @@ on:
         type: string
         default: ''
       lan_ip:
-        description: '后台地址（默认 22.2.2.2）'
+        description: '后台别名地址'
         required: false
         type: string
         default: '22.2.2.2'
@@ -263,7 +263,7 @@ jobs:
           }
 
           if ! validate_ipv4 "$LAN_IP"; then
-            echo "❌ 非法后台地址: $LAN_IP"
+            echo "❌ 非法后台别名地址: $LAN_IP"
             exit 1
           fi
 
@@ -272,7 +272,7 @@ jobs:
           echo "2.4G WiFi 名称: $WIFI_SSID_2G"
           echo "5G WiFi 名称: $WIFI_SSID_5G"
           echo "固件标签前缀: $FW_TAG_PREFIX"
-          echo "后台地址: $LAN_IP"
+          echo "后台别名地址: $LAN_IP"
           echo "禁用系统在线更新: $DISABLE_SYSTEM_UPDATE_INPUT"
           echo "启用代理(OpenClash): $ENABLE_PROXY_INPUT"
           echo "启用终端(ttyd): $ENABLE_TTYD_INPUT"
@@ -331,11 +331,6 @@ jobs:
             # 3. 加载配置
             cp -f $GITHUB_WORKSPACE/$CONFIG .config
             echo "CONFIG_VERSION_DIST=\"$FW_NAME\"" >> .config
-            if grep -q '^CONFIG_TARGET_PREINIT_IP=' .config; then
-              sed -i -E "s@^CONFIG_TARGET_PREINIT_IP=.*@CONFIG_TARGET_PREINIT_IP=\"${LAN_IP}\"@" .config
-            else
-              echo "CONFIG_TARGET_PREINIT_IP=\"${LAN_IP}\"" >> .config
-            fi
 
             mkdir -p files/etc/uci-defaults
             printf '%s\n' \
@@ -422,9 +417,18 @@ jobs:
 
             printf '%s\n' \
               '#!/bin/sh' \
-              '# 首次启动时应用自定义 LAN 地址，避免依赖上游 config_generate 细节。' \
-              "uci -q set network.lan.ipaddr='${LAN_IP}'" \
-              'uci -q commit network' \
+              '# 首次启动时添加后台别名地址，不修改 LAN 主网段。' \
+              "LAN_ALIAS='${LAN_IP}'" \
+              'if [ "$LAN_ALIAS" != "$(uci -q get network.lan.ipaddr)" ]; then' \
+              "  uci -q set network.lan_admin='interface'" \
+              "  uci -q set network.lan_admin.proto='static'" \
+              "  uci -q set network.lan_admin.device='br-lan'" \
+              '  uci -q set network.lan_admin.ipaddr="$LAN_ALIAS"' \
+              "  uci -q set network.lan_admin.netmask='255.255.255.255'" \
+              "  uci -q set network.lan_admin.defaultroute='0'" \
+              "  uci -q set network.lan_admin.peerdns='0'" \
+              '  uci -q commit network' \
+              'fi' \
               'rm -f /etc/uci-defaults/99-custom-lan-ip' \
               > files/etc/uci-defaults/99-custom-lan-ip
             chmod +x files/etc/uci-defaults/99-custom-lan-ip

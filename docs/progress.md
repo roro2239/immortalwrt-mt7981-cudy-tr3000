@@ -21,6 +21,7 @@
 - [FEAT] 2026-03-20：按钮名改为自动获取下拉：页面会从 `/etc/rc.button` 与监测日志中自动提取按钮名（如 `BTN_0`），避免手动填写导致规则不命中。
 - [FIX] 2026-03-20：`mtwifi-cfg` 增加 `apcli` 保护逻辑：仅在 `sta` 配置有效（SSID 非空且未禁用）时才启用 `ApCliEnable/ApCliAutoConnect`，并跳过空配置 `sta` 接口拉起，抑制 `ApSiteSurvey` 扫描风暴导致的 `AP Beacon OFF` 卡顿。
 - [CHORE] 2026-03-20：移除构建阶段“禁用系统在线更新”的菜单/ACL 删除逻辑，恢复后台在线更新入口。
+- [CHORE] 2026-03-20：`openwrt-builder.yml` 将 `lan_ip` 改为“后台别名地址”模式：首启写入 `network.lan_admin` 到 `br-lan`（/32），保留 LAN 主网段不变，避免把终端 DHCP 地址改成 `22.2.2.x`。
 - [PERF] 2026-03-19：全量工作流 `toolchain/host` 缓存键从“绑定 `config/*.config`”调整为“仅绑定分支”，降低配置微调导致的缓存失效概率。
 - [PERF] 2026-03-19：工作流结构调整为“复用快速验证 / SDK 快编 / 全量固件 / U-Boot”；新增 `openwrt-sdk-builder.yml`，支持直接下载 SDK 编译关键包并产出 `ipk`。
 - [PERF] 2026-03-19：`openwrt-sdk-builder.yml` 新增开关 `reuse_sdk_cache`，可选复用 SDK 目录缓存；关闭时强制重新下载 SDK，便于排查缓存污染问题。
