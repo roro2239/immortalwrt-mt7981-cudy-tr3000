@@ -11,9 +11,15 @@ on:
         required: true
         type: string
         default: 'https://downloads.immortalwrt.org/releases/24.10.2/targets/mediatek/filogic/immortalwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst'
+      reuse_sdk_cache:
+        description: '是否复用 SDK 缓存'
+        required: false
+        type: boolean
+        default: true
 
 env:
   SDK_URL: ${{ github.event.inputs.sdk_url }}
+  REUSE_SDK_CACHE_INPUT: ${{ github.event.inputs.reuse_sdk_cache || 'true' }}
   TZ: Asia/Shanghai
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -34,7 +40,22 @@ jobs:
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
+      - name: 🔑 生成 SDK 缓存键
+        id: sdk-key
+        run: |
+          SDK_HASH="$(printf '%s' "$SDK_URL" | sha256sum | cut -c1-16)"
+          echo "key=${{ runner.os }}-openwrt-sdk-${SDK_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: ⚙️ 缓存 SDK 目录
+        id: sdk-cache
+        if: env.REUSE_SDK_CACHE_INPUT == 'true'
+        uses: actions/cache@v4
+        with:
+          path: /workdir/sdk
+          key: ${{ steps.sdk-key.outputs.key }}
+
       - name: ⬇️ 下载并解压 SDK
+        if: env.REUSE_SDK_CACHE_INPUT != 'true' || steps.sdk-cache.outputs.cache-hit != 'true'
         working-directory: /workdir
         run: |
           wget -nv -O sdk.tar "$SDK_URL"
