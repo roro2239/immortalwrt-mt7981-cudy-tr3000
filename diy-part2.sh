@@ -23,6 +23,7 @@
 sed -i 's/ci-llvm=true/ci-llvm=false/g' feeds/packages/lang/rust/Makefile
 
 # 禁用“系统在线更新”（隐藏菜单并移除对应 ACL）
+if [ "${DISABLE_SYSTEM_UPDATE:-true}" = "true" ]; then
 python3 - <<'PY'
 import json
 from pathlib import Path
@@ -46,6 +47,9 @@ for path, key in targets:
         data.pop(key)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 PY
+else
+  echo "保留系统在线更新"
+fi
 
 # add date in output file name
 sed -i -e '/^IMG_PREFIX:=/i BUILD_DATE := $(shell date +%Y%m%d)' \

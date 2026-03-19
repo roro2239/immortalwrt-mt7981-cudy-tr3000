@@ -35,16 +35,36 @@ on:
         required: false
         type: string
         default: '22.2.2.2'
-      package_preset:
-        description: '预设包方案'
+      disable_system_update:
+        description: '是否禁用系统在线更新'
         required: false
-        type: choice
-        default: '全量'
-        options:
-          - '全量'
-          - '精简'
-          - '管理'
-          - '代理'
+        type: boolean
+        default: true
+      enable_proxy:
+        description: '是否启用代理（OpenClash）'
+        required: false
+        type: boolean
+        default: true
+      enable_ttyd:
+        description: '是否启用终端（ttyd）'
+        required: false
+        type: boolean
+        default: true
+      enable_upnp:
+        description: '是否启用 UPnP'
+        required: false
+        type: boolean
+        default: true
+      enable_package_manager:
+        description: '是否启用软件包管理'
+        required: false
+        type: boolean
+        default: false
+      enable_wrtbwmon:
+        description: '是否启用流量监控（wrtbwmon）'
+        required: false
+        type: boolean
+        default: false
       enable_istore:
         description: '是否启用 iStore'
         required: false
@@ -75,7 +95,12 @@ env:
   DEVICE_INPUT: ${{ github.event.inputs.device || github.event.client_payload.device }}
   FIRMWARE_NAME_INPUT: ${{ github.event.inputs.firmware_name || '' }}
   LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '22.2.2.2' }}
-  PACKAGE_PRESET_INPUT: ${{ github.event.inputs.package_preset || '全量' }}
+  DISABLE_SYSTEM_UPDATE_INPUT: ${{ github.event.inputs.disable_system_update || 'true' }}
+  ENABLE_PROXY_INPUT: ${{ github.event.inputs.enable_proxy || 'true' }}
+  ENABLE_TTYD_INPUT: ${{ github.event.inputs.enable_ttyd || 'true' }}
+  ENABLE_UPNP_INPUT: ${{ github.event.inputs.enable_upnp || 'true' }}
+  ENABLE_PACKAGE_MANAGER_INPUT: ${{ github.event.inputs.enable_package_manager || 'false' }}
+  ENABLE_WRTBWMON_INPUT: ${{ github.event.inputs.enable_wrtbwmon || 'false' }}
   ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'true' }}
   EXTRA_PACKAGES_INPUT: ${{ github.event.inputs.extra_packages || '' }}
   REMOVE_PACKAGES_INPUT: ${{ github.event.inputs.remove_packages || '' }}
@@ -155,6 +180,7 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
+          export DISABLE_SYSTEM_UPDATE="$DISABLE_SYSTEM_UPDATE_INPUT"
           $GITHUB_WORKSPACE/$DIY_P2_SH
 
       - name: 🔨 构建 256M 固件
@@ -188,7 +214,12 @@ jobs:
           echo "固件名称: $FW_NAME"
           echo "固件标签前缀: $FW_TAG_PREFIX"
           echo "后台地址: $LAN_IP"
-          echo "预设包方案: $PACKAGE_PRESET_INPUT"
+          echo "禁用系统在线更新: $DISABLE_SYSTEM_UPDATE_INPUT"
+          echo "启用代理(OpenClash): $ENABLE_PROXY_INPUT"
+          echo "启用终端(ttyd): $ENABLE_TTYD_INPUT"
+          echo "启用UPnP: $ENABLE_UPNP_INPUT"
+          echo "启用软件包管理: $ENABLE_PACKAGE_MANAGER_INPUT"
+          echo "启用流量监控(wrtbwmon): $ENABLE_WRTBWMON_INPUT"
           echo "启用 iStore: $ISTORE_ENABLE_INPUT"
           echo "fw_name=$FW_NAME" >> $GITHUB_OUTPUT
           echo "fw_tag_prefix=$FW_TAG_PREFIX" >> $GITHUB_OUTPUT
@@ -204,36 +235,28 @@ jobs:
             fi
           }
 
-          case "$PACKAGE_PRESET_INPUT" in
-            "全量"|"full")
-              PRESET_ADD=""
-              PRESET_REMOVE=""
-              ;;
-            "精简"|"lite")
-              PRESET_ADD=""
-              PRESET_REMOVE="luci-app-openclash luci-app-package-manager luci-app-wrtbwmon luci-app-upnp luci-i18n-package-manager-zh-cn luci-i18n-wrtbwmon-zh-cn luci-i18n-upnp-zh-cn"
-              ;;
-            "管理"|"manage")
-              PRESET_ADD="luci-app-ttyd luci-i18n-ttyd-zh-cn luci-app-upnp luci-i18n-upnp-zh-cn"
-              PRESET_REMOVE="luci-app-openclash luci-app-package-manager luci-app-wrtbwmon luci-i18n-package-manager-zh-cn luci-i18n-wrtbwmon-zh-cn"
-              ;;
-            "代理"|"proxy")
-              PRESET_ADD="luci-app-ttyd luci-i18n-ttyd-zh-cn luci-app-upnp luci-i18n-upnp-zh-cn luci-app-openclash"
-              PRESET_REMOVE="luci-app-package-manager luci-app-wrtbwmon luci-i18n-package-manager-zh-cn luci-i18n-wrtbwmon-zh-cn"
-              ;;
-            *)
-              echo "❌ 未知预设包方案: $PACKAGE_PRESET_INPUT"
-              exit 1
-              ;;
-          esac
+          TOGGLE_ADD=""
+          TOGGLE_REMOVE=""
+          toggle_packages() {
+            local enabled="$1"
+            shift
+            if [ "$enabled" = "true" ]; then
+              TOGGLE_ADD="$TOGGLE_ADD $*"
+            else
+              TOGGLE_REMOVE="$TOGGLE_REMOVE $*"
+            fi
+          }
 
-          if [ "$ISTORE_ENABLE_INPUT" = "true" ]; then
-            FORCED_ADD="luci-app-store luci-lib-taskd luci-lib-xterm taskd"
-            FORCED_REMOVE=""
-          else
-            FORCED_ADD=""
-            FORCED_REMOVE="luci-app-store luci-lib-taskd luci-lib-xterm taskd app-store-ui"
+          toggle_packages "$ENABLE_PROXY_INPUT" "luci-app-openclash"
+          toggle_packages "$ENABLE_TTYD_INPUT" "luci-app-ttyd luci-i18n-ttyd-zh-cn"
+          toggle_packages "$ENABLE_UPNP_INPUT" "luci-app-upnp luci-i18n-upnp-zh-cn"
+          toggle_packages "$ENABLE_PACKAGE_MANAGER_INPUT" "luci-app-package-manager luci-i18n-package-manager-zh-cn"
+          toggle_packages "$ENABLE_WRTBWMON_INPUT" "luci-app-wrtbwmon luci-i18n-wrtbwmon-zh-cn"
+          toggle_packages "$ISTORE_ENABLE_INPUT" "luci-app-store luci-lib-taskd luci-lib-xterm taskd"
+          if [ "$ISTORE_ENABLE_INPUT" != "true" ]; then
+            TOGGLE_REMOVE="$TOGGLE_REMOVE app-store-ui"
           fi
+
           DEVICES="256M"
           mkdir -p $GITHUB_WORKSPACE/firmware_collection
 
@@ -265,8 +288,8 @@ jobs:
               exit 1
             fi
 
-            ENABLE_PKGS="$FORCED_ADD $PRESET_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT")"
-            DISABLE_PKGS="$FORCED_REMOVE $PRESET_REMOVE $(normalize_packages "$REMOVE_PACKAGES_INPUT")"
+            ENABLE_PKGS="$TOGGLE_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT")"
+            DISABLE_PKGS="$TOGGLE_REMOVE $(normalize_packages "$REMOVE_PACKAGES_INPUT")"
 
             for PKG in $ENABLE_PKGS; do
               validate_package_name "$PKG"
@@ -281,7 +304,7 @@ jobs:
             # 4. 刷新配置并下载
             make defconfig
 
-            for PKG in $FORCED_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT"); do
+            for PKG in $TOGGLE_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT"); do
               validate_package_name "$PKG"
               if ! grep -Eq "^CONFIG_PACKAGE_${PKG}=(y|m)$" .config; then
                 echo "❌ 包不可用或未被启用: $PKG"
