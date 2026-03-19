@@ -11,6 +11,16 @@ on:
         required: true
         type: string
         default: 'https://downloads.immortalwrt.org/releases/24.10.2/targets/mediatek/filogic/immortalwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst'
+      source_repo:
+        description: '上游源码仓库（用于拉取 MTK 包）'
+        required: false
+        type: string
+        default: 'https://github.com/padavanonly/immortalwrt-mt798x-6.6'
+      source_branch:
+        description: '上游源码分支'
+        required: false
+        type: string
+        default: 'openwrt-24.10-6.6'
       reuse_sdk_cache:
         description: '是否复用 SDK 缓存'
         required: false
@@ -19,6 +29,8 @@ on:
 
 env:
   SDK_URL: ${{ github.event.inputs.sdk_url }}
+  SOURCE_REPO: ${{ github.event.inputs.source_repo || 'https://github.com/padavanonly/immortalwrt-mt798x-6.6' }}
+  SOURCE_BRANCH: ${{ github.event.inputs.source_branch || 'openwrt-24.10-6.6' }}
   REUSE_SDK_CACHE_INPUT: ${{ github.event.inputs.reuse_sdk_cache || 'true' }}
   TZ: Asia/Shanghai
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -66,8 +78,21 @@ jobs:
             tar -xf sdk.tar -C sdk --strip-components=1
           fi
 
+      - name: ⬇️ 拉取上游 MTK 包
+        working-directory: /workdir
+        run: |
+          rm -rf src-upstream
+          git clone --depth=1 --single-branch --branch "$SOURCE_BRANCH" "$SOURCE_REPO" src-upstream
+
       - name: 🧩 注入本地包与修复补丁
         run: |
+          mkdir -p /workdir/sdk/package/mtk/applications
+          mkdir -p /workdir/sdk/package/mtk/drivers
+
+          cp -a /workdir/src-upstream/package/mtk/applications/mtwifi-cfg /workdir/sdk/package/mtk/applications/
+          cp -a /workdir/src-upstream/package/mtk/applications/datconf /workdir/sdk/package/mtk/applications/
+          cp -a /workdir/src-upstream/package/mtk/drivers/wifi-profile /workdir/sdk/package/mtk/drivers/
+
           cp -a package/luci-app-button-automation /workdir/sdk/package/
 
           if [ -f /workdir/sdk/package/mtk/applications/mtwifi-cfg/files/mtwifi-cfg/mtwifi_cfg ]; then
@@ -90,6 +115,12 @@ jobs:
           BUILD_JOBS="$((CPU_THREADS + 1))"
           BUILD_LOAD="$CPU_THREADS"
 
+          make package/mtk/applications/datconf/clean
+          make package/mtk/applications/datconf/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
+
+          make package/mtk/drivers/wifi-profile/clean
+          make package/mtk/drivers/wifi-profile/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
+
           make package/mtk/applications/mtwifi-cfg/clean
           make package/mtk/applications/mtwifi-cfg/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" V=s
 
@@ -101,6 +132,8 @@ jobs:
         with:
           name: sdk-build-ipk
           path: |
+            /workdir/sdk/bin/packages/**/datconf-lua*.ipk
+            /workdir/sdk/bin/packages/**/wifi-dats*.ipk
             /workdir/sdk/bin/packages/**/mtwifi-cfg*.ipk
             /workdir/sdk/bin/packages/**/luci-app-button-automation*.ipk
           if-no-files-found: warn

@@ -19,3 +19,4 @@
 - [PERF] 2026-03-19：全量工作流 `toolchain/host` 缓存键从“绑定 `config/*.config`”调整为“仅绑定分支”，降低配置微调导致的缓存失效概率。
 - [PERF] 2026-03-19：工作流结构调整为“复用快速验证 / SDK 快编 / 全量固件 / U-Boot”；新增 `openwrt-sdk-builder.yml`，支持直接下载 SDK 编译关键包并产出 `ipk`。
 - [PERF] 2026-03-19：`openwrt-sdk-builder.yml` 新增开关 `reuse_sdk_cache`，可选复用 SDK 目录缓存；关闭时强制重新下载 SDK，便于排查缓存污染问题。
+- [FIX] 2026-03-19：修复 SDK 工作流 `mtwifi-cfg` 编译失败：新增 `source_repo/source_branch` 输入并拉取上游 MTK 包（`datconf`、`wifi-profile`、`mtwifi-cfg`）注入 SDK 后再编译，避免 SDK 缺包导致目标不存在。
