@@ -82,7 +82,34 @@ jobs:
         working-directory: /workdir
         run: |
           rm -rf src-upstream
-          git clone --depth=1 --single-branch --branch "$SOURCE_BRANCH" "$SOURCE_REPO" src-upstream
+          start_heartbeat() {
+            (
+              while true; do
+                echo "⏳ 正在拉取上游 MTK 包: $(date '+%F %T')"
+                sleep 20
+              done
+            ) &
+            HEARTBEAT_PID=$!
+          }
+
+          stop_heartbeat() {
+            if [ -n "${HEARTBEAT_PID:-}" ]; then
+              kill "$HEARTBEAT_PID" 2>/dev/null || true
+              wait "$HEARTBEAT_PID" 2>/dev/null || true
+              unset HEARTBEAT_PID
+            fi
+          }
+
+          export GIT_TERMINAL_PROMPT=0
+          start_heartbeat
+          timeout 8m git clone --depth=1 --filter=blob:none --sparse --single-branch --branch "$SOURCE_BRANCH" "$SOURCE_REPO" src-upstream
+          stop_heartbeat
+
+          cd src-upstream
+          git sparse-checkout set \
+            package/mtk/applications/mtwifi-cfg \
+            package/mtk/applications/datconf \
+            package/mtk/drivers/wifi-profile
 
       - name: 🧩 注入本地包与修复补丁
         run: |
