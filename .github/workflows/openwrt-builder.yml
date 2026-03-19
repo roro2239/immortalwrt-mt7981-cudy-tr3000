@@ -344,6 +344,19 @@ jobs:
               "uci -q set system.@system[0].hostname='${HOSTNAME_ESCAPED}'" \
               "if uci -q get wireless.default_radio0 >/dev/null; then uci -q set wireless.default_radio0.ssid='${WIFI_SSID_2G_ESCAPED}'; fi" \
               "if uci -q get wireless.default_radio1 >/dev/null; then uci -q set wireless.default_radio1.ssid='${WIFI_SSID_5G_ESCAPED}'; fi" \
+              'idx=0' \
+              'for section in $(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do' \
+              '  mode=$(uci -q get wireless.${section}.mode)' \
+              '  [ "$mode" = "ap" ] || continue' \
+              '  if [ "$idx" -eq 0 ]; then' \
+              "    uci -q set wireless.\${section}.ssid='${WIFI_SSID_2G_ESCAPED}'" \
+              '    logger -t custom-naming "set 2.4G ssid on section=${section}"' \
+              '  elif [ "$idx" -eq 1 ]; then' \
+              "    uci -q set wireless.\${section}.ssid='${WIFI_SSID_5G_ESCAPED}'" \
+              '    logger -t custom-naming "set 5G ssid on section=${section}"' \
+              '  fi' \
+              '  idx=$((idx + 1))' \
+              'done' \
               'uci -q commit system' \
               'uci -q commit wireless' \
               'rm -f /etc/uci-defaults/97-custom-naming' \

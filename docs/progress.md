@@ -12,3 +12,4 @@
 - [FEAT] 2026-03-19：新增 `luci-app-button-automation`（后台 UI + hotplug 执行链），支持基于滑动开关 `pressed/released` 事件配置三类动作：`WiFi 总开关`、`LED 开关`、`自定义命令`（含全局开关与去抖动）。
 - [CHORE] 2026-03-19：`luci-app-button-automation` 维护者字段更新为 `洛夕`；移除仓库内 `128M` 相关配置文件（`config/128m.config`、`config/128muboot.config`）。
 - [DOC] 2026-03-19：新增 `docs/button-automation.md`，说明按键自动化的功能入口、规则配置、日志排障与动作范围（`WiFi 总开关`、`LED 开关`、`自定义命令`）。
+- [FIX] 2026-03-19：修复 WiFi 名称未生效。`97-custom-naming` 在保留 `default_radio0/1` 写法的同时，新增对 `wireless.*=wifi-iface` 的 AP 段遍历兜底写入，兼容非标准无线 section 命名。
