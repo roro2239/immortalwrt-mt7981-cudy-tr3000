@@ -65,8 +65,8 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.ListValue, 'wifi_state', _('WiFi 状态'));
-		o.value('on', _('开启'));
-		o.value('off', _('关闭'));
+		o.value('on', _('开'));
+		o.value('off', _('关'));
 		o.depends('op_type', 'wifi');
 		o.rmempty = false;
 
@@ -78,8 +78,8 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.ListValue, 'led_state', _('LED 状态'));
-		o.value('on', _('开启'));
-		o.value('off', _('关闭'));
+		o.value('on', _('开'));
+		o.value('off', _('关'));
 		o.depends('op_type', 'led');
 		o.rmempty = false;
 
@@ -91,4 +91,3 @@ return view.extend({
 		return m.render();
 	}
 });
-

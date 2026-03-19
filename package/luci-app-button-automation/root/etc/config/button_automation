@@ -2,4 +2,3 @@ config global 'settings'
 	option enabled '1'
 	option debounce_ms '500'
 	option allow_custom_command '0'
-

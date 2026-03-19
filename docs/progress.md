@@ -10,3 +10,5 @@
 - [UI] 2026-03-19：默认主题切换为 `luci-theme-argon`（第三方高活跃仓库），并在首次启动通过 `uci-defaults` 强制写入 `luci.main.mediaurlbase=/luci-static/argon`，避免回退到旧主题。
 - [FEAT] 2026-03-19：新增 `hostname`、`wifi_ssid_2g`、`wifi_ssid_5g` 构建输入；首次启动通过 `97-custom-naming` 把系统主机名与双频 WiFi 名称写入 UCI（默认从 `firmware_name` 自动派生）。
 - [FEAT] 2026-03-19：新增 `luci-app-button-automation`（后台 UI + hotplug 执行链），支持基于滑动开关 `pressed/released` 事件配置三类动作：`WiFi 总开关`、`LED 开关`、`自定义命令`（含全局开关与去抖动）。
+- [CHORE] 2026-03-19：`luci-app-button-automation` 维护者字段更新为 `洛夕`；移除仓库内 `128M` 相关配置文件（`config/128m.config`、`config/128muboot.config`）。
+- [DOC] 2026-03-19：新增 `docs/button-automation.md`，说明按键自动化的功能入口、规则配置、日志排障与动作范围（`WiFi 总开关`、`LED 开关`、`自定义命令`）。
