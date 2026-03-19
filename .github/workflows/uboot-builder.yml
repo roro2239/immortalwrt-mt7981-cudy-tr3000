@@ -1,10 +1,10 @@
-name: 798x-UBOOT
+name: 798x U-Boot 编译
 
 on:
   workflow_dispatch:
     inputs:
       prerelease:
-        description: '是否发布为预发布版本 (Pre-release)'
+        description: '是否发布为预发布版本'
         required: false
         type: boolean
         default: false
@@ -26,10 +26,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Projects
+      - name: 检出项目
         uses: actions/checkout@main
 
-      - name: ⚙️ Initialization Environment
+      - name: ⚙️ 初始化环境
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -47,17 +47,16 @@ jobs:
           sudo chown $USER:$USER /mnt/build_wrt
           sudo ln -s /mnt/build_wrt $GITHUB_WORKSPACE/wrt
 
-      - name: ⬇️ Clone Code
+      - name: ⬇️ 克隆源码
         run: |
           git clone --depth=1 --single-branch --branch $WRT_BRANCH $WRT_REPO ./wrt/
 
-      - name: 🛠️ Compile Firmware
+      - name: 🛠️ 编译固件
         run: |
           cd ./wrt/
           SOC=mt7981 BOARD=cudy_tr3000-v1-256mb VERSION=2025 MULTI_LAYOUT=0 ./build.sh
-          SOC=mt7981 BOARD=cudy_tr3000-v1 VERSION=2025 MULTI_LAYOUT=1 ./build.sh
 
-      - name: 📦 Package Firmware
+      - name: 📦 打包固件
         run: |
           cd ./wrt/ && mkdir -p ./upload/
 
@@ -72,7 +71,7 @@ jobs:
             mv -f "$FILE" "./upload/$NEW_FILE"
           done
 
-      - name: 📌 Generate release tag
+      - name: 📌 生成发布标签
         id: tag
         run: |
           BUILD_TIME=$(date +"%Y%m%d-%H%M")
@@ -81,32 +80,32 @@ jobs:
 
           # 生成 release 信息
           cat > release.txt << EOF
-          ## 📦 Uboot Firmware Release
+          ## 📦 U-Boot 固件发布
 
-          **🏷️ Release:** $RELEASE_TAG
-          **📦 Repo:** $WRT_REPO
-          **🌿 Branch:** $WRT_BRANCH
+          **🏷️ 版本标签:** $RELEASE_TAG
+          **📦 源码仓库:** $WRT_REPO
+          **🌿 分支:** $WRT_BRANCH
           **📱 ATF:** atf-20250711
           **📱 MTK:** uboot-mtk-20250711
-          **📱 Device:** cudy_tr3000 128M/256M
-          **📅 Build Date:** $BUILD_TIME
+          **📱 设备:** cudy_tr3000 256M
+          **📅 构建时间:** $BUILD_TIME
 
-          ## 📥 Download
+          ## 📥 下载
 
-          Download the firmware files from the assets below.
+          请从下方附件下载固件文件。
 
-          ## 🚧 Notice
+          ## 🚧 说明
 
-          该固件为 DHCP uboot, 128M uboot 为三分区布局，支持原厂 ubi 大小 64MB，扩容 ubi 分区 112MB，最大 ubi 分区 122MB，256M uboot 为单分区布局。
+          该固件为 DHCP uboot，256M uboot 为单分区布局。
 
           ---
 
-          Built with ❤️ using [GitHub Actions](https://github.com/features/actions)
+          基于 [GitHub Actions](https://github.com/features/actions) 构建
           EOF
 
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: 📤 Upload firmware to release
+      - name: 📤 上传固件到发行版
         uses: softprops/action-gh-release@v2
         if: steps.tag.outputs.status == 'success' && !cancelled()
         env:
@@ -117,7 +116,7 @@ jobs:
           prerelease: ${{ env.PRERELEASE == 'true' }}
           files: ./wrt/upload/*.bin
 
-      - name: Delete workflow runs
+      - name: 删除工作流运行记录
         uses: Mattraks/delete-workflow-runs@v2
         with:
           retain_days: 0

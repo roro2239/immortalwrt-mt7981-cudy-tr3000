@@ -2,7 +2,7 @@
 # https://github.com/P3TERX/Actions-OpenWrt
 #
 # File: .github/workflows/update-checker.yml
-# Description: Source code update checker
+# Description: 源码更新检查器
 #
 # Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
 #
@@ -10,7 +10,7 @@
 # See /LICENSE for more information.
 #
 
-name: Update Checker
+name: 更新检查器
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
@@ -26,33 +26,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get Commit Hash
+      - name: 获取 Commit 哈希
         id: getHash
         run: |
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH .
           echo "commitHash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Compare Commit Hash
+      - name: 对比 Commit 哈希
         id: cacheHash
         uses: actions/cache@v3
         with:
           path: .commitHash
           key: commitHash_${{ steps.getHash.outputs.commitHash }}
 
-      - name: Save New Commit Hash
+      - name: 保存新 Commit 哈希
         if: steps.cacheHash.outputs.cache-hit != 'true'
         run: |
           echo ${{ steps.getHash.outputs.commitHash }} | tee .commitHash
 
-      - name: Trigger build
+      - name: 触发构建
         if: steps.cacheHash.outputs.cache-hit != 'true'
         uses: peter-evans/repository-dispatch@v2
         with:
           token: ${{ github.token }}
           event-type: Source Code Update
-          client-payload: '{"device": "all", "repo": "https://github.com/padavanonly/immortalwrt-mt798x-6.6"}'
+          client-payload: '{"device": "256M", "repo": "https://github.com/padavanonly/immortalwrt-mt798x-6.6"}'
 
-      - name: Delete workflow runs
+      - name: 删除工作流运行记录
         uses: Mattraks/delete-workflow-runs@v2
         with:
           retain_days: 0
