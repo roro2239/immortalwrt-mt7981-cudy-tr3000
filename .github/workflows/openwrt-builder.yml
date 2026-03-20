@@ -535,7 +535,11 @@ jobs:
           done
 
           echo "正在收集产物"
-          find bin/targets/ -name "*sysupgrade.bin" -exec cp {} $GITHUB_WORKSPACE/firmware_collection/ \;
+          while IFS= read -r src_file; do
+            base_name="$(basename "$src_file")"
+            target_name="${FW_TAG_PREFIX}_${DEVICE_INPUT}_${REPO_BRANCH}_${base_name}"
+            cp "$src_file" "$GITHUB_WORKSPACE/firmware_collection/${target_name}"
+          done < <(find bin/targets/ -name "*sysupgrade.bin" -type f)
 
           echo "status=success" >> $GITHUB_OUTPUT
 
