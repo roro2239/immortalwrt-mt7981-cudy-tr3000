@@ -46,10 +46,10 @@ on:
         type: string
         default: ''
       lan_ip:
-        description: '后台别名地址'
+        description: '后台别名地址（仅支持 RFC1918 私网）'
         required: false
         type: string
-        default: '22.2.2.2'
+        default: '10.0.0.1'
       enable_proxy:
         description: '是否启用代理（OpenClash）'
         required: false
@@ -111,7 +111,7 @@ env:
   HOSTNAME_INPUT: ${{ github.event.inputs.hostname || github.event.client_payload.hostname || '' }}
   WIFI_SSID_2G_INPUT: ${{ github.event.inputs.wifi_ssid_2g || github.event.client_payload.wifi_ssid_2g || '' }}
   WIFI_SSID_5G_INPUT: ${{ github.event.inputs.wifi_ssid_5g || github.event.client_payload.wifi_ssid_5g || '' }}
-  LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '22.2.2.2' }}
+  LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '10.0.0.1' }}
   ENABLE_PROXY_INPUT: ${{ github.event.inputs.enable_proxy || 'true' }}
   ENABLE_TTYD_INPUT: ${{ github.event.inputs.enable_ttyd || 'true' }}
   ENABLE_UPNP_INPUT: ${{ github.event.inputs.enable_upnp || 'true' }}
@@ -259,8 +259,37 @@ jobs:
             done
           }
 
+          is_rfc1918_private_ipv4() {
+            local ip="$1"
+            local IFS='.'
+            local -a octets=()
+
+            read -r -a octets <<< "$ip"
+            [ "${#octets[@]}" -eq 4 ] || return 1
+
+            # 允许范围：10.0.0.0/8、172.16.0.0/12、192.168.0.0/16
+            if [ "${octets[0]}" -eq 10 ]; then
+              return 0
+            fi
+
+            if [ "${octets[0]}" -eq 172 ] && [ "${octets[1]}" -ge 16 ] && [ "${octets[1]}" -le 31 ]; then
+              return 0
+            fi
+
+            if [ "${octets[0]}" -eq 192 ] && [ "${octets[1]}" -eq 168 ]; then
+              return 0
+            fi
+
+            return 1
+          }
+
           if ! validate_ipv4 "$LAN_IP"; then
             echo "非法后台别名地址: $LAN_IP"
+            exit 1
+          fi
+
+          if ! is_rfc1918_private_ipv4 "$LAN_IP"; then
+            echo "后台别名地址必须是 RFC1918 私网地址: $LAN_IP"
             exit 1
           fi
 
