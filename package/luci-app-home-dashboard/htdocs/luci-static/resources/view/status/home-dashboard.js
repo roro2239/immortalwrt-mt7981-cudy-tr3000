@@ -93,6 +93,11 @@ function firstDns(obj) {
 	return arr.length ? arr[0] : '-';
 }
 
+function routeCount(obj) {
+	var arr = (obj && obj.route) || [];
+	return String(arr.length || 0);
+}
+
 function parseTemp(data) {
 	if (!data || !Array.isArray(data.tempinfo) || !data.tempinfo.length)
 		return '-';
@@ -292,6 +297,7 @@ return view.extend({
 				E('div', { 'class': 'home-panel' }, [
 					E('h3', { 'class': 'home-panel-title' }, _('网络信息')),
 					E('div', { 'class': 'home-kv' }, [
+						itemRow(_('路由条目'), routeCount(wan)),
 						itemRow(_('WAN IPv4'), firstAddr(wan)),
 						itemRow(_('WAN 网关'), firstGateway(wan)),
 						itemRow(_('WAN DNS'), firstDns(wan)),

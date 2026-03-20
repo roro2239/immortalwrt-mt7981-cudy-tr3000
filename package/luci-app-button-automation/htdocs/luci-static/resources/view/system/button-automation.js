@@ -58,11 +58,6 @@ return view.extend({
 		o.default = '1';
 		o.rmempty = false;
 
-		o = s.option(form.DummyValue, '_button_fixed', _('按钮名'));
-		o.textvalue = function() {
-			return 'BTN_0';
-		};
-
 		o = s.option(form.HiddenValue, 'button');
 		o.default = 'BTN_0';
 		o.rmempty = false;
