@@ -131,7 +131,7 @@ jobs:
           chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
           $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      - name: 编译关键包
+      - name: 编译自研插件
         run: |
           cd /workdir/openwrt
 
@@ -144,16 +144,42 @@ jobs:
           [ "$BUILD_JOBS" -lt 4 ] && BUILD_JOBS=4
           [ "$BUILD_LOAD" -lt 4 ] && BUILD_LOAD=4
 
-          make package/mtk/applications/mtwifi-cfg/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
-          make package/luci-app-button-automation/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
-          make package/luci-app-home-dashboard/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
+          CUSTOM_PKGS=()
+          while IFS= read -r pkg_dir; do
+            pkg_name="$(basename "$pkg_dir")"
+            CUSTOM_PKGS+=("$pkg_name")
+          done < <(find "$GITHUB_WORKSPACE/package" -mindepth 1 -maxdepth 1 -type d | sort)
+
+          if [ "${#CUSTOM_PKGS[@]}" -eq 0 ]; then
+            echo "未发现自研插件目录：$GITHUB_WORKSPACE/package"
+            exit 1
+          fi
+
+          echo "本次快速编译插件：${CUSTOM_PKGS[*]}"
+          for pkg in "${CUSTOM_PKGS[@]}"; do
+            if [ ! -d "package/$pkg" ]; then
+              echo "源码树缺少插件目录: package/$pkg"
+              exit 1
+            fi
+
+            echo "开始编译插件: $pkg"
+            make "package/$pkg/compile" -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
+          done
+
+          rm -rf /workdir/openwrt/fast-ipk
+          mkdir -p /workdir/openwrt/fast-ipk
+          for pkg in "${CUSTOM_PKGS[@]}"; do
+            find /workdir/openwrt/bin/packages -type f -name "${pkg}_*.ipk" -exec cp -f {} /workdir/openwrt/fast-ipk/ \;
+          done
+
+          if [ -z "$(ls -A /workdir/openwrt/fast-ipk 2>/dev/null)" ]; then
+            echo "未收集到任何自研插件 ipk"
+            exit 1
+          fi
 
       - name: 上传 ipk（若存在）
         uses: actions/upload-artifact@v4
         with:
           name: fast-verify-ipk-${{ env.ARTIFACT_TAG_INPUT || 'latest' }}
-          path: |
-            /workdir/openwrt/bin/packages/**/mtwifi-cfg*.ipk
-            /workdir/openwrt/bin/packages/**/luci-app-button-automation*.ipk
-            /workdir/openwrt/bin/packages/**/luci-app-home-dashboard*.ipk
+          path: /workdir/openwrt/fast-ipk/*.ipk
           if-no-files-found: warn
