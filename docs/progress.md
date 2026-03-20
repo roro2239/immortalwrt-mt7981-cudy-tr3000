@@ -41,6 +41,8 @@
 - [FIX] 2026-03-20：修复首页改造未生效：`luci-app-home-dashboard` 菜单覆盖文件改为后加载命名（`zz-home-dashboard-override.json`），稳定接管 `admin/status/overview` 到 `status/home-dashboard`。
 - [FIX] 2026-03-20：按键自动化页面进一步收敛：移除规则里的“按钮名”显示项，前端仅保留隐藏字段强制写入 `BTN_0`，与后端固定 `BTN_0` 触发链路一致。
 - [FEAT] 2026-03-20：首页聚合增强：`home-dashboard` 新增 WAN `路由条目` 展示，继续与实时流量图、网络信息、网口状态合并在单页“首页”展示。
+- [FIX] 2026-03-20：清理快速编译工作流遗留输入：`openwrt-fast-builder.yml` 移除 `mtwifi_pkg_release` 及 `PKG_RELEASE` 动态改写逻辑，避免继续暴露无效参数。
+- [FIX] 2026-03-20：快速编译工作流补齐首页插件链路：新增 `luci-app-home-dashboard` 编译与 `ipk` 上传，确保快编产物包含首页插件。
 - [CHORE] 2026-03-20：清理 `diy-part2.sh` 中历史 WiFi 修复注入段（`mtwifi-cfg/apcli/startwapp` 补丁），仅保留通用构建逻辑。
 - [FEAT] 2026-03-20：新增 `flash_uboot_bl2_fip.sh` 交互式刷写脚本，固定读取 `/tmp/bl2.bin` 与 `/tmp/fip.bin`，支持 `1=仅备份`、`2=仅刷入`、`3=备份并刷入` 三种模式，并自动识别 `BL2/FIP` 分区、执行 `mtd verify` 校验与备份 MD5 落盘。
 - [FIX] 2026-03-20：`flash_uboot_bl2_fip.sh` 增强分区识别与备份链路：自动识别失败时支持手动输入 `mtd编号`（默认 `BL2=mtd1`、`FIP=mtd2`）；备份优先 `nanddump`，缺失时回退 `dd` 原始备份，兼容无标签分区场景。

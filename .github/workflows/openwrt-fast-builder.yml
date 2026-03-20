@@ -21,11 +21,6 @@ on:
         required: false
         type: boolean
         default: true
-      mtwifi_pkg_release:
-        description: 'mtwifi-cfg 的 PKG_RELEASE（数字）'
-        required: false
-        type: string
-        default: '1'
       artifact_tag:
         description: '产物标签（可选）'
         required: false
@@ -49,7 +44,6 @@ env:
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'true' }}
-  MTWIFI_PKG_RELEASE_INPUT: ${{ github.event.inputs.mtwifi_pkg_release || '1' }}
   ARTIFACT_TAG_INPUT: ${{ github.event.inputs.artifact_tag || '' }}
   SKIP_FEEDS_UPDATE_INPUT: ${{ github.event.inputs.skip_feeds_update || 'true' }}
   CCACHE_DIR: /workdir/.ccache
@@ -140,17 +134,6 @@ jobs:
       - name: 编译关键包
         run: |
           cd /workdir/openwrt
-          MTWIFI_REL="$MTWIFI_PKG_RELEASE_INPUT"
-          if ! echo "$MTWIFI_REL" | grep -Eq '^[0-9]+$'; then
-            echo "mtwifi_pkg_release 必须是数字，当前: $MTWIFI_REL"
-            exit 1
-          fi
-
-          MTWIFI_MK="package/mtk/applications/mtwifi-cfg/Makefile"
-          if [ -f "$MTWIFI_MK" ]; then
-            sed -i -E "s/^PKG_RELEASE:=.*/PKG_RELEASE:=${MTWIFI_REL}/" "$MTWIFI_MK"
-            echo "mtwifi-cfg PKG_RELEASE 已设置为 ${MTWIFI_REL}"
-          fi
 
           cp -f $GITHUB_WORKSPACE/config/256m.config .config
           make defconfig
@@ -163,12 +146,14 @@ jobs:
 
           make package/mtk/applications/mtwifi-cfg/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
           make package/luci-app-button-automation/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
+          make package/luci-app-home-dashboard/compile -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
 
       - name: 上传 ipk（若存在）
         uses: actions/upload-artifact@v4
         with:
-          name: fast-verify-ipk-${{ env.ARTIFACT_TAG_INPUT || env.MTWIFI_PKG_RELEASE_INPUT }}
+          name: fast-verify-ipk-${{ env.ARTIFACT_TAG_INPUT || 'latest' }}
           path: |
             /workdir/openwrt/bin/packages/**/mtwifi-cfg*.ipk
             /workdir/openwrt/bin/packages/**/luci-app-button-automation*.ipk
+            /workdir/openwrt/bin/packages/**/luci-app-home-dashboard*.ipk
           if-no-files-found: warn
