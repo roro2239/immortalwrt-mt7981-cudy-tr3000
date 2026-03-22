@@ -36,13 +36,6 @@ else
   echo "未找到本地包 luci-app-home-dashboard，跳过"
 fi
 
-if [ -d "${GITHUB_WORKSPACE}/package/luci-app-ufi-tools" ]; then
-  mkdir -p package/luci-app-ufi-tools
-  cp -a "${GITHUB_WORKSPACE}/package/luci-app-ufi-tools/." package/luci-app-ufi-tools/
-else
-  echo "未找到本地包 luci-app-ufi-tools，跳过"
-fi
-
 if [ "${ISTORE_ENABLE:-true}" = "true" ]; then
   git clone https://github.com/linkease/istore package/istore
 else

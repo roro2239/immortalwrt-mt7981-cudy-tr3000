@@ -50,6 +50,11 @@ on:
         required: false
         type: string
         default: '10.0.0.1'
+      enable_usb_power:
+        description: '是否默认开启 USB 供电'
+        required: false
+        type: boolean
+        default: true
       enable_proxy:
         description: '是否启用代理（OpenClash）'
         required: false
@@ -112,6 +117,7 @@ env:
   WIFI_SSID_2G_INPUT: ${{ github.event.inputs.wifi_ssid_2g || github.event.client_payload.wifi_ssid_2g || '' }}
   WIFI_SSID_5G_INPUT: ${{ github.event.inputs.wifi_ssid_5g || github.event.client_payload.wifi_ssid_5g || '' }}
   LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '10.0.0.1' }}
+  ENABLE_USB_POWER_INPUT: ${{ github.event.inputs.enable_usb_power || github.event.client_payload.enable_usb_power || 'true' }}
   ENABLE_PROXY_INPUT: ${{ github.event.inputs.enable_proxy || 'true' }}
   ENABLE_TTYD_INPUT: ${{ github.event.inputs.enable_ttyd || 'true' }}
   ENABLE_UPNP_INPUT: ${{ github.event.inputs.enable_upnp || 'true' }}
@@ -299,6 +305,16 @@ jobs:
           echo "5G WiFi 名称: $WIFI_SSID_5G"
           echo "固件标签前缀: $FW_TAG_PREFIX"
           echo "后台别名地址: $LAN_IP"
+          if [ "$ENABLE_USB_POWER_INPUT" != "true" ] && [ "$ENABLE_USB_POWER_INPUT" != "false" ]; then
+            echo "USB 供电开关仅支持 true/false: $ENABLE_USB_POWER_INPUT"
+            exit 1
+          fi
+          if [ "$ENABLE_USB_POWER_INPUT" = "true" ]; then
+            USB_POWER_GPIO_OUTPUT='<0>'
+          else
+            USB_POWER_GPIO_OUTPUT='<1>'
+          fi
+          echo "默认开启 USB 供电: $ENABLE_USB_POWER_INPUT"
           echo "启用代理(OpenClash): $ENABLE_PROXY_INPUT"
           echo "启用终端(ttyd): $ENABLE_TTYD_INPUT"
           echo "启用UPnP: $ENABLE_UPNP_INPUT"
@@ -356,6 +372,13 @@ jobs:
             # 3. 加载配置
             cp -f $GITHUB_WORKSPACE/$CONFIG .config
             echo "CONFIG_VERSION_DIST=\"$FW_NAME\"" >> .config
+            DTS_USB_POWER_FILE="target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1.dtsi"
+            if [ ! -f "$DTS_USB_POWER_FILE" ]; then
+              echo "未找到 USB 供电控制 DTS 文件: $DTS_USB_POWER_FILE"
+              exit 1
+            fi
+            sed -i "/modem-power {/,/};/ s/gpio-export,output = <[01]>;/gpio-export,output = ${USB_POWER_GPIO_OUTPUT};/" "$DTS_USB_POWER_FILE"
+            echo "已写入 USB 供电默认值: gpio-export,output = ${USB_POWER_GPIO_OUTPUT}"
 
             mkdir -p files/etc/uci-defaults
             printf '%s\n' \
@@ -376,8 +399,8 @@ jobs:
               '      uci -q set wireless.${dev}.channel=36' \
               '      changed=1' \
               '    fi' \
-              '    if [ "$htmode" != "VHT80" ]; then' \
-              '      uci -q set wireless.${dev}.htmode=VHT80' \
+              '    if [ "$htmode" != "HE80" ]; then' \
+              '      uci -q set wireless.${dev}.htmode=HE80' \
               '      changed=1' \
               '    fi' \
               '  fi' \
