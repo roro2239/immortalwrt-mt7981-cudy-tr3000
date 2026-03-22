@@ -9,10 +9,21 @@
         ],
         "network.interface": [
           "status"
+        ]
+      },
+      "file": {
+        "/etc/opkg/distfeeds.conf": [
+          "read"
         ],
-        "luci": [
-          "getETHInfo",
-          "getTempInfo"
+        "/proc/stat": [
+          "read"
+        ]
+      }
+    },
+    "write": {
+      "file": {
+        "/etc/opkg/distfeeds.conf": [
+          "write"
         ]
       }
     }

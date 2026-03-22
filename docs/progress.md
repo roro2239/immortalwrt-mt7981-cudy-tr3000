@@ -48,3 +48,12 @@
 - [FEAT] 2026-03-20：新增 `flash_uboot_bl2_fip.sh` 交互式刷写脚本，固定读取 `/tmp/bl2.bin` 与 `/tmp/fip.bin`，支持 `1=仅备份`、`2=仅刷入`、`3=备份并刷入` 三种模式，并自动识别 `BL2/FIP` 分区、执行 `mtd verify` 校验与备份 MD5 落盘。
 - [FIX] 2026-03-20：`flash_uboot_bl2_fip.sh` 增强分区识别与备份链路：自动识别失败时支持手动输入 `mtd编号`（默认 `BL2=mtd1`、`FIP=mtd2`）；备份优先 `nanddump`，缺失时回退 `dd` 原始备份，兼容无标签分区场景。
 - [CHORE] 2026-03-20：移除 `flash_uboot_bl2_fip.sh` 刷写/备份脚本，避免仓库继续携带该设备侧高风险操作入口。
+- [RESEARCH] 2026-03-22：完成 USB 共享网络与 USB 网络加速调研。确认当前固件仅内置 `kmod-usb-net-cdc-ether`、`kmod-usb-net-rndis`，已内置 `luci-app-turboacc-mtk`、`kmod-mediatek_hnat`、`kmod-nft-offload`，但缺少更完整的 USB 共享驱动集与默认启用加速的首启配置。
+- [DOC] 2026-03-22：新增 `docs/usb-tethering-design.md`，沉淀 USB 共享网络默认内置方案、包选择范围、默认启用加速策略与实施边界，等待确认后落地。
+- [FEAT] 2026-03-22：`config/256m.config` 默认内置 `kmod-usb-net-cdc-ncm`、`kmod-usb-net-ipheth`、`kmod-usb-wdm`，补齐 Android/iPhone USB 共享网络驱动覆盖。
+- [FEAT] 2026-03-22：全量工作流新增 USB 网络加速首启脚本，默认开启 `flow_offloading + flow_offloading_hw`；后续因软件源首启脚本插入，编号顺延为 `100-usb-turboacc`。
+- [UI] 2026-03-22：重做 `luci-app-home-dashboard` 首页为现代化概览页：顶部 Hero + 软件源快捷切换 + 圆形指标环 + 轻量流量图；同时适配手机与桌面端布局。
+- [FIX] 2026-03-22：首页不再渲染 `null` 占位；移除对缺失 RPC `luci.getETHInfo/getTempInfo` 的依赖，接口状态改为基于 `network.interface.status` 展示。
+- [FEAT] 2026-03-22：首页新增软件源快捷切换，支持 `官方源` 与 `中科大源` 直接切换 `distfeeds.conf`。
+- [FEAT] 2026-03-22：全量工作流新增首启脚本 `99-default-opkg-mirror`，默认将软件源切换为 `USTC`；加速脚本顺延为 `100-usb-turboacc`，后台别名脚本顺延为 `101-custom-lan-ip`。
+- [CHORE] 2026-03-22：`luci-app-home-dashboard` 与 `luci-app-button-automation` 包版本固定为 `1.0.0`。
