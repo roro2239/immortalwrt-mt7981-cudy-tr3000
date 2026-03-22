@@ -68,3 +68,4 @@
 - [FEAT] 2026-03-23：增强 SDK 插件工作流：新增“最新稳定版 SDK 检查”与 `GITHUB_STEP_SUMMARY` 输出；同时对下载下来的 SDK 压缩包增加 `actions/cache` 缓存，避免同版本重复下载，若官方稳定版升级则因文件名/版本变化自动命中新缓存键。
 - [FEAT] 2026-03-23：SDK 插件工作流新增 `plugin_version` 输入。运行时由用户填写统一版本号；若非空，则在注入 SDK 后批量覆盖所有自定义插件 `Makefile` 中的 `PKG_VERSION`，并在 `GITHUB_STEP_SUMMARY` 输出当前版本策略；留空则保持仓库内版本。
 - [FIX] 2026-03-23：修复 SDK 插件工作流被无关 feed 包阻塞。移除 `./scripts/feeds install -a -p packages/luci` 的全量安装，改为在注入自定义插件后扫描其 `Makefile` 中的直接依赖并按需执行 `./scripts/feeds install <pkg>`；避免 `luci-app-diskman` 等无关包触发 Kconfig 递归依赖错误，减少 `No feed for package` 噪音。
+- [FIX] 2026-03-23：增强 SDK 插件工作流的基础配置与排障能力。注入插件前先载入 `config/256m.config` 作为基础 `.config`，避免 SDK 以过于精简的默认配置构建 LuCI 依赖链；同时在插件编译失败时自动回退执行 `make package/<pkg>/compile -j1 V=s` 并上传详细日志 Artifact，便于定位 `cgi-io / lucihttp / rpcd-mod-luci / ucode-mod-html` 等基础依赖的真实报错。

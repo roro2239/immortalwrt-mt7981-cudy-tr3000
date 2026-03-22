@@ -253,6 +253,9 @@ jobs:
           set -euo pipefail
           cd "${SDK_DIR}"
 
+          tr -d '\r' < "$GITHUB_WORKSPACE/config/256m.config" > .config
+          echo "已载入基础配置: config/256m.config"
+
           CUSTOM_PKGS=()
           CUSTOM_FEED_PKGS=()
           while IFS= read -r pkg_dir; do
@@ -369,11 +372,31 @@ jobs:
           [ "${BUILD_JOBS}" -lt 4 ] && BUILD_JOBS=4
           [ "${BUILD_LOAD}" -lt 4 ] && BUILD_LOAD=4
 
+          rm -rf /workdir/sdk-logs
+          mkdir -p /workdir/sdk-logs
+
           while IFS= read -r pkg; do
             [ -n "${pkg}" ] || continue
             echo "开始编译插件: ${pkg}"
-            make "package/${pkg}/compile" -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
+            if make "package/${pkg}/compile" -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"; then
+              continue
+            fi
+
+            log_file="/workdir/sdk-logs/${pkg}.log"
+            echo "并行编译失败，开始输出详细日志: ${pkg}"
+            if ! make "package/${pkg}/compile" -j1 V=s 2>&1 | tee "${log_file}"; then
+              echo "详细日志已保存: ${log_file}"
+              exit 1
+            fi
           done < /workdir/custom-pkgs.txt
+
+      - name: 上传编译日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-plugin-logs-${{ env.ARTIFACT_TAG_INPUT || steps.sdk_info.outputs.sdk_version }}
+          path: /workdir/sdk-logs/*
+          if-no-files-found: ignore
 
       - name: 收集 ipk
         shell: bash
