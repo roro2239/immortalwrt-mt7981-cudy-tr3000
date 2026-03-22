@@ -1,0 +1,293 @@
+name: ImmortalWrt SDK 插件编译
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_version:
+        description: 'SDK 版本（留空自动取官方最新稳定版）'
+        required: false
+        type: string
+        default: ''
+      sdk_url:
+        description: 'SDK 下载地址（优先级最高，留空则按版本自动拼接）'
+        required: false
+        type: string
+        default: ''
+      artifact_tag:
+        description: '产物标签（可选）'
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: sdk-plugin-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TARGET_BOARD: mediatek
+  TARGET_SUBTARGET: filogic
+  SDK_VERSION_INPUT: ${{ github.event.inputs.sdk_version || '' }}
+  SDK_URL_INPUT: ${{ github.event.inputs.sdk_url || '' }}
+  ARTIFACT_TAG_INPUT: ${{ github.event.inputs.artifact_tag || '' }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  TZ: Asia/Shanghai
+
+jobs:
+  sdk-build:
+    name: SDK 编译自定义插件
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 初始化环境
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm mkisofs ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig tar texinfo uglifyjs unzip wget xz-utils xmlto zlib1g-dev zstd
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: 检查最新稳定版 SDK
+        id: latest_sdk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          latest_stable_version="$(
+            curl -fsSL https://downloads.immortalwrt.org/ \
+            | grep -oE 'ImmortalWrt [0-9]+\.[0-9]+\.[0-9]+' \
+            | head -n1 \
+            | awk '{print $2}'
+          )"
+
+          if [ -z "${latest_stable_version}" ]; then
+            echo "无法识别官方最新稳定版 SDK 版本"
+            exit 1
+          fi
+
+          echo "latest_stable_version=${latest_stable_version}" >> "$GITHUB_OUTPUT"
+          echo "LATEST_STABLE_SDK_VERSION=${latest_stable_version}" >> "$GITHUB_ENV"
+          echo "官方最新稳定版 SDK: ${latest_stable_version}"
+
+      - name: 解析 SDK 下载地址
+        id: sdk_info
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "${SDK_URL_INPUT}" ]; then
+            sdk_url="${SDK_URL_INPUT}"
+            sdk_file="$(basename "${sdk_url}")"
+            sdk_version="$(printf '%s\n' "${sdk_file}" | sed -n 's/^immortalwrt-sdk-\([0-9][^ -]*\)-'"${TARGET_BOARD}"'-'"${TARGET_SUBTARGET}"'.*$/\1/p')"
+            if [ -z "${sdk_version}" ]; then
+              sdk_version="custom"
+            fi
+          else
+            sdk_version="${SDK_VERSION_INPUT}"
+            if [ -z "${sdk_version}" ]; then
+              sdk_version="${LATEST_STABLE_SDK_VERSION}"
+            fi
+
+            if [ -z "${sdk_version}" ]; then
+              echo "无法识别最新稳定版 SDK 版本"
+              exit 1
+            fi
+
+            target_url="https://downloads.immortalwrt.org/releases/${sdk_version}/targets/${TARGET_BOARD}/${TARGET_SUBTARGET}/"
+            sdk_file="$(
+              curl -fsSL "${target_url}" \
+              | grep -oE "immortalwrt-sdk-${sdk_version}-${TARGET_BOARD}-${TARGET_SUBTARGET}[^\"']*Linux-x86_64\\.tar\\.(xz|zst)" \
+              | head -n1
+            )"
+
+            if [ -z "${sdk_file}" ]; then
+              echo "目标目录未找到 SDK 文件: ${target_url}"
+              exit 1
+            fi
+
+            sdk_url="${target_url}${sdk_file}"
+          fi
+
+          echo "SDK_VERSION=${sdk_version}" >> "$GITHUB_ENV"
+          echo "SDK_FILE=${sdk_file}" >> "$GITHUB_ENV"
+          echo "SDK_URL=${sdk_url}" >> "$GITHUB_ENV"
+          echo "sdk_version=${sdk_version}" >> "$GITHUB_OUTPUT"
+          echo "sdk_file=${sdk_file}" >> "$GITHUB_OUTPUT"
+          echo "sdk_url=${sdk_url}" >> "$GITHUB_OUTPUT"
+
+          echo "SDK_VERSION=${sdk_version}"
+          echo "SDK_FILE=${sdk_file}"
+          echo "SDK_URL=${sdk_url}"
+
+      - name: 检查 SDK 是否有更新
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          latest="${LATEST_STABLE_SDK_VERSION}"
+          current="${SDK_VERSION}"
+
+          {
+            echo "## SDK 状态"
+            echo
+            echo "- 官方最新稳定版：\`${latest}\`"
+            echo "- 当前编译目标：\`${current}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "${SDK_URL_INPUT}" ]; then
+            echo "- 当前使用自定义 SDK 地址，跳过更新性判断" >> "$GITHUB_STEP_SUMMARY"
+            echo "当前使用自定义 SDK 地址，跳过更新性判断"
+          elif [ "${current}" != "${latest}" ]; then
+            echo "- 检查结果：检测到 SDK 已更新，当前指定版本不是最新稳定版" >> "$GITHUB_STEP_SUMMARY"
+            echo "检测到 SDK 已更新：当前 ${current}，最新稳定版 ${latest}"
+          else
+            echo "- 检查结果：当前已是最新稳定版 SDK" >> "$GITHUB_STEP_SUMMARY"
+            echo "当前已是最新稳定版 SDK：${current}"
+          fi
+
+      - name: 缓存 SDK 压缩包
+        uses: actions/cache@v4
+        with:
+          path: /workdir/sdk-archive-cache
+          key: ${{ runner.os }}-immortalwrt-sdk-archive-${{ steps.sdk_info.outputs.sdk_file }}
+          restore-keys: |
+            ${{ runner.os }}-immortalwrt-sdk-archive-
+
+      - name: 缓存 SDK 包下载目录
+        uses: actions/cache@v4
+        with:
+          path: /workdir/sdk-dl
+          key: ${{ runner.os }}-immortalwrt-sdk-dl-${{ steps.sdk_info.outputs.sdk_version }}-${{ env.TARGET_BOARD }}-${{ env.TARGET_SUBTARGET }}
+          restore-keys: |
+            ${{ runner.os }}-immortalwrt-sdk-dl-${{ env.TARGET_BOARD }}-${{ env.TARGET_SUBTARGET }}-
+
+      - name: 下载并解压 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /workdir
+
+          rm -rf sdk-root
+          mkdir -p sdk-root sdk-dl sdk-archive-cache
+
+          archive="/workdir/sdk-archive-cache/${SDK_FILE}"
+          if [ ! -f "${archive}" ]; then
+            wget -O "${archive}" "${SDK_URL}"
+          fi
+
+          case "${SDK_FILE}" in
+            *.tar.zst)
+              tar --zstd -xf "${archive}" -C sdk-root
+              ;;
+            *.tar.xz)
+              tar -xJf "${archive}" -C sdk-root
+              ;;
+            *)
+              echo "不支持的 SDK 压缩格式: ${SDK_FILE}"
+              exit 1
+              ;;
+          esac
+
+          sdk_dir="$(find /workdir/sdk-root -mindepth 1 -maxdepth 1 -type d -name 'immortalwrt-sdk-*' | head -n1)"
+          if [ -z "${sdk_dir}" ]; then
+            echo "SDK 解压后未找到目录"
+            exit 1
+          fi
+
+          rm -rf "${sdk_dir}/dl"
+          ln -s /workdir/sdk-dl "${sdk_dir}/dl"
+
+          ln -sfn "${sdk_dir}" /workdir/openwrt-sdk
+          ln -sfn /workdir/openwrt-sdk "$GITHUB_WORKSPACE/openwrt-sdk"
+
+          echo "SDK_DIR=${sdk_dir}" >> "$GITHUB_ENV"
+
+      - name: 更新必要 feeds
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${SDK_DIR}"
+          ./scripts/feeds update packages luci
+          ./scripts/feeds install -a -p packages
+          ./scripts/feeds install -a -p luci
+
+      - name: 注入并配置自定义插件
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${SDK_DIR}"
+
+          CUSTOM_PKGS=()
+          while IFS= read -r pkg_dir; do
+            pkg_name="$(basename "${pkg_dir}")"
+            CUSTOM_PKGS+=("${pkg_name}")
+            rm -rf "package/${pkg_name}"
+            cp -a "${pkg_dir}" "package/${pkg_name}"
+          done < <(find "$GITHUB_WORKSPACE/package" -mindepth 1 -maxdepth 1 -type d | sort)
+
+          if [ "${#CUSTOM_PKGS[@]}" -eq 0 ]; then
+            echo "未发现自定义插件目录：$GITHUB_WORKSPACE/package"
+            exit 1
+          fi
+
+          : > /workdir/custom-pkgs.txt
+          for pkg in "${CUSTOM_PKGS[@]}"; do
+            echo "${pkg}" >> /workdir/custom-pkgs.txt
+            echo "CONFIG_PACKAGE_${pkg}=m" >> .config
+          done
+
+          make defconfig
+
+          echo "本次 SDK 编译插件："
+          cat /workdir/custom-pkgs.txt
+
+      - name: 编译自定义插件
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${SDK_DIR}"
+
+          CPU_THREADS="$(nproc)"
+          BUILD_JOBS="$((CPU_THREADS * 2))"
+          BUILD_LOAD="$((CPU_THREADS * 2))"
+          [ "${BUILD_JOBS}" -lt 4 ] && BUILD_JOBS=4
+          [ "${BUILD_LOAD}" -lt 4 ] && BUILD_LOAD=4
+
+          while IFS= read -r pkg; do
+            [ -n "${pkg}" ] || continue
+            echo "开始编译插件: ${pkg}"
+            make "package/${pkg}/compile" -j"${BUILD_JOBS}" -l"${BUILD_LOAD}"
+          done < /workdir/custom-pkgs.txt
+
+      - name: 收集 ipk
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /workdir/sdk-ipk
+          mkdir -p /workdir/sdk-ipk
+
+          while IFS= read -r pkg; do
+            [ -n "${pkg}" ] || continue
+            find "${SDK_DIR}/bin/packages" -type f -name "${pkg}_*.ipk" -exec cp -f {} /workdir/sdk-ipk/ \;
+          done < /workdir/custom-pkgs.txt
+
+          if [ -z "$(ls -A /workdir/sdk-ipk 2>/dev/null)" ]; then
+            echo "未收集到任何自定义插件 ipk"
+            exit 1
+          fi
+
+          cp /workdir/custom-pkgs.txt /workdir/sdk-ipk/custom-packages.txt
+
+      - name: 上传 ipk
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-plugin-ipk-${{ env.ARTIFACT_TAG_INPUT || steps.sdk_info.outputs.sdk_version }}
+          path: |
+            /workdir/sdk-ipk/*.ipk
+            /workdir/sdk-ipk/custom-packages.txt
+          if-no-files-found: error

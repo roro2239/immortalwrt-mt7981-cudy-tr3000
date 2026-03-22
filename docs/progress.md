@@ -57,3 +57,12 @@
 - [FEAT] 2026-03-22：首页新增软件源快捷切换，支持 `官方源` 与 `中科大源` 直接切换 `distfeeds.conf`。
 - [FEAT] 2026-03-22：全量工作流新增首启脚本 `99-default-opkg-mirror`，默认将软件源切换为 `USTC`；加速脚本顺延为 `100-usb-turboacc`，后台别名脚本顺延为 `101-custom-lan-ip`。
 - [CHORE] 2026-03-22：`luci-app-home-dashboard` 与 `luci-app-button-automation` 包版本固定为 `1.0.0`。
+- [RESEARCH] 2026-03-23：完成 `E:\AIDE\UFI-TOOLS` 调研。确认其 Web 后台由 Android 侧 Ktor 服务提供，`2333` 端口同时承载静态页面、原厂 `goform` 反向代理、自定义 API 与“自定义头部/插件注入”能力，不能通过 LuCI 重写页面来替代。
+- [RESEARCH] 2026-03-23：补充核查 `iStore` 菜单实现。其当前顶级入口来自 `admin/store`，顺序值为 `31`；`UFI-TOOLS` 若需插入“服务”和 `iStore` 之间，应设计为独立顶级菜单，而不是挂到 `admin/services/*` 下。
+- [DOC] 2026-03-23：新增 `docs/ufi-tools-luci-design.md`，沉淀 `UFI-TOOLS` 封装进 LuCI 的推荐方案、技术边界、风险点与待确认项；当前状态为“设计待确认”，未开始实现。
+- [DESIGN] 2026-03-23：补充“双插件方案”评估。结论：可以通过“`UFI-TOOLS` 插件提供结构化数据/嵌入能力 + LuCI 插件负责 OpenWrt 原生界面”实现，但这已经不再是“完全复刻原后台”，而是“可控子集重构”；若要兼容未来任意第三方插件 UI，仍需保留原页嵌入方案。
+- [DESIGN] 2026-03-23：方案收敛为“单 LuCI 插件优先”。原因：它最符合 KISS，开发量和维护面最小；若仅目标是把原后台封装进 OpenWrt 菜单并保持完整功能，单插件方案优于双插件。
+- [FEAT] 2026-03-23：新增 `package/luci-app-ufi-tools`，首版采用“单 LuCI 插件 + 原版后台承载”方案：提供顶级菜单 `UFI-TOOLS`、默认地址配置 `http://192.168.0.1:2333/`、内嵌页加载/刷新/新窗口打开工具栏，以及 LuCI 侧 `UCI + ACL + menu.d` 接入。
+- [FEAT] 2026-03-23：将 `luci-app-ufi-tools` 加入 `config/256m.config` 默认选择，并更新 `diy-part1.sh`，确保全量构建时本地包能被拷入实际编译树。
+- [FEAT] 2026-03-23：新增 SDK 专用工作流 `.github/workflows/openwrt-sdk-plugin-builder.yml`。该工作流直接下载 `ImmortalWrt SDK`，只注入并编译仓库 `package/` 下的自定义插件，不再克隆完整源码树，也不编译固件或其它功能包；支持 `sdk_version` 自动识别最新稳定版，亦支持手动传入 `sdk_url` 覆盖下载地址。
+- [FEAT] 2026-03-23：增强 SDK 插件工作流：新增“最新稳定版 SDK 检查”与 `GITHUB_STEP_SUMMARY` 输出；同时对下载下来的 SDK 压缩包增加 `actions/cache` 缓存，避免同版本重复下载，若官方稳定版升级则因文件名/版本变化自动命中新缓存键。

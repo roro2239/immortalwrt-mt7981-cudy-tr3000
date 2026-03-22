@@ -1,0 +1,13 @@
+{
+  "admin/ufi-tools": {
+    "title": "UFI-TOOLS",
+    "order": 30.5,
+    "action": {
+      "type": "view",
+      "path": "ufi-tools/overview"
+    },
+    "depends": {
+      "acl": [ "luci-app-ufi-tools" ]
+    }
+  }
+}

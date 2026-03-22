@@ -1,0 +1,2 @@
+config main 'main'
+	option url 'http://192.168.0.1:2333/'

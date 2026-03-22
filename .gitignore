@@ -5,4 +5,5 @@ docs/*
 !docs/progress.md
 !docs/home-dashboard-redesign.md
 !docs/usb-tethering-design.md
+!docs/ufi-tools-luci-design.md
 docs/full-build-acceleration.md
