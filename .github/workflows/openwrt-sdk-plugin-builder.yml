@@ -21,6 +21,11 @@ on:
         required: false
         type: string
         default: ''
+      plugin_version:
+        description: '统一插件版本号（留空则保持各插件 Makefile 中的 PKG_VERSION）'
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   group: sdk-plugin-build-${{ github.ref }}
@@ -32,6 +37,7 @@ env:
   SDK_VERSION_INPUT: ${{ github.event.inputs.sdk_version || '' }}
   SDK_URL_INPUT: ${{ github.event.inputs.sdk_url || '' }}
   ARTIFACT_TAG_INPUT: ${{ github.event.inputs.artifact_tag || '' }}
+  PLUGIN_VERSION_INPUT: ${{ github.event.inputs.plugin_version || '' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   TZ: Asia/Shanghai
 
@@ -150,6 +156,33 @@ jobs:
             echo "当前已是最新稳定版 SDK：${current}"
           fi
 
+      - name: 检查插件版本输入
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          plugin_version="${PLUGIN_VERSION_INPUT}"
+
+          {
+            echo
+            echo "## 自定义插件版本"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "${plugin_version}" ]; then
+            echo "- 版本策略：未覆盖，保持各插件仓库内版本" >> "$GITHUB_STEP_SUMMARY"
+            echo "未指定统一插件版本号，保持各插件仓库内版本"
+            exit 0
+          fi
+
+          if ! printf '%s\n' "${plugin_version}" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._+-]*$'; then
+            echo "插件版本号格式非法：${plugin_version}"
+            echo "仅允许字母、数字、点、下划线、加号、减号，且不能以分隔符开头"
+            exit 1
+          fi
+
+          echo "- 版本策略：统一覆盖所有自定义插件的 \`PKG_VERSION=${plugin_version}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "统一插件版本号：${plugin_version}"
+
       - name: 缓存 SDK 压缩包
         uses: actions/cache@v4
         with:
@@ -228,6 +261,22 @@ jobs:
             CUSTOM_PKGS+=("${pkg_name}")
             rm -rf "package/${pkg_name}"
             cp -a "${pkg_dir}" "package/${pkg_name}"
+
+            if [ -n "${PLUGIN_VERSION_INPUT}" ]; then
+              makefile_path="package/${pkg_name}/Makefile"
+              if [ ! -f "${makefile_path}" ]; then
+                echo "未找到插件 Makefile: ${makefile_path}"
+                exit 1
+              fi
+
+              if ! grep -Eq '^PKG_VERSION:=' "${makefile_path}"; then
+                echo "插件 Makefile 缺少 PKG_VERSION 定义: ${makefile_path}"
+                exit 1
+              fi
+
+              sed -i -E "s|^PKG_VERSION:=.*$|PKG_VERSION:=${PLUGIN_VERSION_INPUT}|" "${makefile_path}"
+              echo "已统一版本号: ${pkg_name} -> ${PLUGIN_VERSION_INPUT}"
+            fi
           done < <(find "$GITHUB_WORKSPACE/package" -mindepth 1 -maxdepth 1 -type d | sort)
 
           if [ "${#CUSTOM_PKGS[@]}" -eq 0 ]; then
@@ -245,6 +294,10 @@ jobs:
 
           echo "本次 SDK 编译插件："
           cat /workdir/custom-pkgs.txt
+
+          if [ -n "${PLUGIN_VERSION_INPUT}" ]; then
+            echo "统一插件版本号：${PLUGIN_VERSION_INPUT}"
+          fi
 
       - name: 编译自定义插件
         shell: bash
