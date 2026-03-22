@@ -240,14 +240,12 @@ jobs:
 
           echo "SDK_DIR=${sdk_dir}" >> "$GITHUB_ENV"
 
-      - name: 更新必要 feeds
+      - name: 更新 feeds 索引
         shell: bash
         run: |
           set -euo pipefail
           cd "${SDK_DIR}"
           ./scripts/feeds update packages luci
-          ./scripts/feeds install -a -p packages
-          ./scripts/feeds install -a -p luci
 
       - name: 注入并配置自定义插件
         shell: bash
@@ -256,6 +254,7 @@ jobs:
           cd "${SDK_DIR}"
 
           CUSTOM_PKGS=()
+          CUSTOM_FEED_PKGS=()
           while IFS= read -r pkg_dir; do
             pkg_name="$(basename "${pkg_dir}")"
             CUSTOM_PKGS+=("${pkg_name}")
@@ -277,6 +276,32 @@ jobs:
               sed -i -E "s|^PKG_VERSION:=.*$|PKG_VERSION:=${PLUGIN_VERSION_INPUT}|" "${makefile_path}"
               echo "已统一版本号: ${pkg_name} -> ${PLUGIN_VERSION_INPUT}"
             fi
+
+            if [ -f "package/${pkg_name}/Makefile" ]; then
+              while IFS= read -r dep_line; do
+                dep_body="${dep_line#*=}"
+                for raw_dep in ${dep_body}; do
+                  dep="${raw_dep#\+}"
+                  case "${dep}" in
+                    ""|@*)
+                      continue
+                      ;;
+                  esac
+
+                  dep="${dep##*:}"
+                  dep="${dep%%/*}"
+                  dep="${dep%%+*}"
+
+                  case "${dep}" in
+                    ""|@*)
+                      continue
+                      ;;
+                  esac
+
+                  CUSTOM_FEED_PKGS+=("${dep}")
+                done
+              done < <(grep -E '^(LUCI_DEPENDS|DEPENDS|PKG_BUILD_DEPENDS|HOST_BUILD_DEPENDS):=' "package/${pkg_name}/Makefile" || true)
+            fi
           done < <(find "$GITHUB_WORKSPACE/package" -mindepth 1 -maxdepth 1 -type d | sort)
 
           if [ "${#CUSTOM_PKGS[@]}" -eq 0 ]; then
@@ -289,15 +314,48 @@ jobs:
             echo "${pkg}" >> /workdir/custom-pkgs.txt
             echo "CONFIG_PACKAGE_${pkg}=m" >> .config
           done
+          sort -u /workdir/custom-pkgs.txt -o /workdir/custom-pkgs.txt
 
-          make defconfig
+          : > /workdir/custom-feed-pkgs.txt
+          if [ "${#CUSTOM_FEED_PKGS[@]}" -gt 0 ]; then
+            printf '%s\n' "${CUSTOM_FEED_PKGS[@]}" | sed '/^$/d' | sort -u > /workdir/custom-feed-pkgs.txt
+          fi
 
           echo "本次 SDK 编译插件："
           cat /workdir/custom-pkgs.txt
 
+          if [ -s /workdir/custom-feed-pkgs.txt ]; then
+            echo "检测到的直接 feed 依赖："
+            cat /workdir/custom-feed-pkgs.txt
+          else
+            echo "未检测到需要安装的 feed 依赖"
+          fi
+
           if [ -n "${PLUGIN_VERSION_INPUT}" ]; then
             echo "统一插件版本号：${PLUGIN_VERSION_INPUT}"
           fi
+
+      - name: 安装自定义插件所需 feeds 依赖
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${SDK_DIR}"
+
+          if [ ! -s /workdir/custom-feed-pkgs.txt ]; then
+            echo "未检测到 feed 依赖，跳过按需安装"
+            make defconfig
+            exit 0
+          fi
+
+          echo "开始按需安装以下 feed 依赖："
+          cat /workdir/custom-feed-pkgs.txt
+
+          while IFS= read -r feed_pkg; do
+            [ -n "${feed_pkg}" ] || continue
+            ./scripts/feeds install "${feed_pkg}"
+          done < /workdir/custom-feed-pkgs.txt
+
+          make defconfig
 
       - name: 编译自定义插件
         shell: bash

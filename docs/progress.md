@@ -67,3 +67,4 @@
 - [FEAT] 2026-03-23：新增 SDK 专用工作流 `.github/workflows/openwrt-sdk-plugin-builder.yml`。该工作流直接下载 `ImmortalWrt SDK`，只注入并编译仓库 `package/` 下的自定义插件，不再克隆完整源码树，也不编译固件或其它功能包；支持 `sdk_version` 自动识别最新稳定版，亦支持手动传入 `sdk_url` 覆盖下载地址。
 - [FEAT] 2026-03-23：增强 SDK 插件工作流：新增“最新稳定版 SDK 检查”与 `GITHUB_STEP_SUMMARY` 输出；同时对下载下来的 SDK 压缩包增加 `actions/cache` 缓存，避免同版本重复下载，若官方稳定版升级则因文件名/版本变化自动命中新缓存键。
 - [FEAT] 2026-03-23：SDK 插件工作流新增 `plugin_version` 输入。运行时由用户填写统一版本号；若非空，则在注入 SDK 后批量覆盖所有自定义插件 `Makefile` 中的 `PKG_VERSION`，并在 `GITHUB_STEP_SUMMARY` 输出当前版本策略；留空则保持仓库内版本。
+- [FIX] 2026-03-23：修复 SDK 插件工作流被无关 feed 包阻塞。移除 `./scripts/feeds install -a -p packages/luci` 的全量安装，改为在注入自定义插件后扫描其 `Makefile` 中的直接依赖并按需执行 `./scripts/feeds install <pkg>`；避免 `luci-app-diskman` 等无关包触发 Kconfig 递归依赖错误，减少 `No feed for package` 噪音。
