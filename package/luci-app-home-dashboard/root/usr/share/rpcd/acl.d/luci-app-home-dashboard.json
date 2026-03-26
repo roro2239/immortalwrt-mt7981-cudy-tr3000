@@ -17,6 +17,12 @@
         ],
         "/proc/stat": [
           "read"
+        ],
+        "/sys/class/net/*/statistics/rx_bytes": [
+          "read"
+        ],
+        "/sys/class/net/*/statistics/tx_bytes": [
+          "read"
         ]
       }
     },
