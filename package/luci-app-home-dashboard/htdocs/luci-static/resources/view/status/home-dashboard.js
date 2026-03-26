@@ -54,6 +54,15 @@ function firmwareVersion(board) {
 	return safeText((board && board.release && board.release.description) || '-');
 }
 
+function productName(board) {
+	var model = String((board && board.model) || '').trim();
+
+	if (!model)
+		return '-';
+
+	return model.replace(/\s+v\d+.*$/i, '');
+}
+
 function formatUptime(sec) {
 	sec = Math.max(0, toNum(sec));
 
@@ -91,6 +100,39 @@ function formatMemory(info) {
 		label: Math.round(used / 1024 / 1024) + ' / ' + Math.round(total / 1024 / 1024) + ' MB',
 		subtitle: _('内存占用')
 	};
+}
+
+function normalizeTemp(value) {
+	var n = toNum(value);
+
+	if (!n)
+		return null;
+
+	if (n > 1000)
+		n = n / 1000;
+
+	if (n < -40 || n > 150)
+		return null;
+
+	return n;
+}
+
+function formatTemp(value) {
+	var n = normalizeTemp(value);
+
+	return n == null ? '-' : n.toFixed(1) + '°C';
+}
+
+function thermalRole(type) {
+	type = String(type || '').trim().toLowerCase();
+
+	if (/wifi|wlan|wireless|radio|phy|mt76|2g|5g/.test(type))
+		return 'wifi';
+
+	if (/cpu|soc|package/.test(type))
+		return 'cpu';
+
+	return '';
 }
 
 function firstAddr(obj) {
@@ -375,6 +417,77 @@ function drawSeries(ctx, values, maxVal, width, height, strokeColor, fillColor, 
 	ctx.stroke();
 }
 
+function drawNormalizedSeries(ctx, values, width, height, strokeColor, fillColor, dotColor) {
+	if (!values.length)
+		return;
+
+	var minVal = Infinity;
+	var maxVal = -Infinity;
+
+	for (var i = 0; i < values.length; i++) {
+		minVal = Math.min(minVal, values[i]);
+		maxVal = Math.max(maxVal, values[i]);
+	}
+
+	var span = Math.max(4, maxVal - minVal);
+	var stepX = width / Math.max(values.length - 1, 1);
+	var pts = [];
+
+	for (var j = 0; j < values.length; j++) {
+		var normalized = (values[j] - minVal) / span;
+		pts.push({
+			x: values.length === 1 ? width / 2 : j * stepX,
+			y: height - normalized * (height - 26) - 13
+		});
+	}
+
+	function trace(points) {
+		if (points.length === 1) {
+			ctx.moveTo(points[0].x, points[0].y);
+			ctx.lineTo(points[0].x + 0.01, points[0].y);
+			return;
+		}
+
+		ctx.moveTo(points[0].x, points[0].y);
+		for (var p = 1; p < points.length - 1; p++) {
+			var cx = (points[p].x + points[p + 1].x) / 2;
+			var cy = (points[p].y + points[p + 1].y) / 2;
+			ctx.quadraticCurveTo(points[p].x, points[p].y, cx, cy);
+		}
+		ctx.quadraticCurveTo(
+			points[points.length - 1].x,
+			points[points.length - 1].y,
+			points[points.length - 1].x,
+			points[points.length - 1].y
+		);
+	}
+
+	ctx.beginPath();
+	ctx.moveTo(pts[0].x, height - 4);
+	trace(pts);
+	ctx.lineTo(pts[pts.length - 1].x, height - 4);
+	ctx.closePath();
+	ctx.fillStyle = fillColor;
+	ctx.fill();
+
+	ctx.beginPath();
+	trace(pts);
+	ctx.strokeStyle = strokeColor;
+	ctx.lineWidth = 2.2;
+	ctx.lineCap = 'round';
+	ctx.lineJoin = 'round';
+	ctx.stroke();
+
+	var last = pts[pts.length - 1];
+	ctx.beginPath();
+	ctx.arc(last.x, last.y, 3.5, 0, Math.PI * 2);
+	ctx.fillStyle = dotColor;
+	ctx.fill();
+	ctx.lineWidth = 1.5;
+	ctx.strokeStyle = '#ffffff';
+	ctx.stroke();
+}
+
 function getCanvasBox(canvas, fallbackW, fallbackH) {
 	var rect = canvas.getBoundingClientRect();
 	var width = Math.max(1, rect.width || fallbackW);
@@ -429,6 +542,136 @@ function drawMetricRing(metric, percent) {
 	ctx.stroke();
 }
 
+function drawTempSeries(ctx, values, width, height) {
+	if (!values.length)
+		return;
+
+	var min = Math.min.apply(Math, values);
+	var max = Math.max.apply(Math, values);
+	var span = Math.max(4, max - min);
+	var stepX = width / Math.max(values.length - 1, 1);
+	var pts = [];
+
+	for (var i = 0; i < values.length; i++) {
+		var normalized = (values[i] - min) / span;
+		pts.push({
+			x: values.length === 1 ? width / 2 : i * stepX,
+			y: height - normalized * (height - 22) - 11
+		});
+	}
+
+	function trace(points) {
+		if (points.length === 1) {
+			ctx.moveTo(points[0].x, points[0].y);
+			ctx.lineTo(points[0].x + 0.01, points[0].y);
+			return;
+		}
+
+		ctx.moveTo(points[0].x, points[0].y);
+		for (var p = 1; p < points.length - 1; p++) {
+			var cx = (points[p].x + points[p + 1].x) / 2;
+			var cy = (points[p].y + points[p + 1].y) / 2;
+			ctx.quadraticCurveTo(points[p].x, points[p].y, cx, cy);
+		}
+		ctx.quadraticCurveTo(
+			points[points.length - 1].x,
+			points[points.length - 1].y,
+			points[points.length - 1].x,
+			points[points.length - 1].y
+		);
+	}
+
+	ctx.beginPath();
+	ctx.moveTo(pts[0].x, height);
+	trace(pts);
+	ctx.lineTo(pts[pts.length - 1].x, height);
+	ctx.closePath();
+	ctx.fillStyle = 'rgba(255,107,53,.08)';
+	ctx.fill();
+
+	ctx.beginPath();
+	trace(pts);
+	ctx.strokeStyle = '#ff6b35';
+	ctx.lineWidth = 2.6;
+	ctx.lineCap = 'round';
+	ctx.lineJoin = 'round';
+	ctx.stroke();
+
+	var last = pts[pts.length - 1];
+	ctx.beginPath();
+	ctx.arc(last.x, last.y, 6.5, 0, Math.PI * 2);
+	ctx.fillStyle = 'rgba(255,107,53,.18)';
+	ctx.fill();
+
+	ctx.beginPath();
+	ctx.arc(last.x, last.y, 3.5, 0, Math.PI * 2);
+	ctx.fillStyle = '#ff6b35';
+	ctx.fill();
+	ctx.lineWidth = 1.5;
+	ctx.strokeStyle = '#ffffff';
+	ctx.stroke();
+}
+
+function discoverThermalSensors() {
+	var jobs = [];
+
+	for (var i = 0; i < 6; i++) {
+		(function(idx) {
+			var base = '/sys/class/thermal/thermal_zone' + idx + '/';
+
+			jobs.push(Promise.all([
+				fs.read(base + 'temp').catch(function() { return null; }),
+				fs.read(base + 'type').catch(function() { return ''; })
+			]).then(function(values) {
+				var temp = normalizeTemp(values[0]);
+				var type = String(values[1] || '').trim().toLowerCase();
+
+				if (temp == null)
+					return null;
+
+				return {
+					path: base + 'temp',
+					type: type,
+					temp: temp,
+					role: thermalRole(type),
+					score: /cpu|soc|package/.test(type) ? 3 : (/wifi|wlan|wireless|radio|phy|mt76|2g|5g/.test(type) ? 3 : 1)
+				};
+			}));
+		})(i);
+	}
+
+	return Promise.all(jobs).then(function(results) {
+		results = results.filter(function(item) { return item; });
+		results.sort(function(a, b) { return b.score - a.score; });
+
+		var cpu = null;
+		var wifi = null;
+
+		for (var i = 0; i < results.length; i++) {
+			if (!cpu && (results[i].role === 'cpu' || (!results[i].role && !cpu)))
+				cpu = results[i];
+
+			if (!wifi && results[i].role === 'wifi')
+				wifi = results[i];
+		}
+
+		if (!wifi) {
+			for (var j = 0; j < results.length; j++) {
+				if (cpu && results[j].path === cpu.path)
+					continue;
+
+				wifi = results[j];
+				break;
+			}
+		}
+
+		return {
+			cpu: cpu,
+			wifi: wifi
+		};
+	});
+}
+
 function parseCpuStat(text) {
 	if (!text)
 		return null;
@@ -463,6 +706,22 @@ function calcCpuPercent(prev, next) {
 		return null;
 
 	return clamp(Math.round((1 - idleDelta / totalDelta) * 100), 0, 100);
+}
+
+function wifiInterfaceSummary(statuses) {
+	var names = [];
+	var wwan = (statuses && statuses.wwan) || {};
+
+	collectDeviceNames(names, wwan.l3_device);
+	collectDeviceNames(names, wwan.device);
+	collectDeviceNames(names, wwan.ifname);
+	collectDeviceNames(names, wwan.device_name);
+	collectDeviceNames(names, [ 'rax0', 'wlan0', 'wlan1', 'ra0', 'rai0', 'apcli0', 'wwan0' ]);
+
+	return {
+		name: names.length ? names[0] : _('未检测到'),
+		state: wwan.up ? _('在线') : _('离线')
+	};
 }
 
 function currentMirror(content) {
@@ -500,24 +759,26 @@ function makeMetric(title, tone) {
 	var percentEl = E('div', { 'class': 'home-ring-percent' }, '--%');
 	var valueEl = E('div', { 'class': 'home-metric-value' }, '-');
 	var subtitleEl = E('div', { 'class': 'home-metric-sub' }, '');
+	var mainEl = E('div', { 'class': 'home-metric-main' }, [
+		E('div', { 'class': 'home-ring-wrap' }, [
+			canvas,
+			E('div', { 'class': 'home-ring-core' }),
+			percentEl
+		]),
+		E('div', { 'class': 'home-metric-text' }, [
+			valueEl,
+			subtitleEl
+		])
+	]);
 
 	return {
 		node: E('section', { 'class': 'home-metric' }, [
 			E('div', { 'class': 'home-metric-top' }, [
 				E('div', { 'class': 'home-metric-title' }, title)
 			]),
-			E('div', { 'class': 'home-metric-main' }, [
-				E('div', { 'class': 'home-ring-wrap' }, [
-					canvas,
-					E('div', { 'class': 'home-ring-core' }),
-					percentEl
-				]),
-				E('div', { 'class': 'home-metric-text' }, [
-					valueEl,
-					subtitleEl
-				])
-			])
+			mainEl
 		]),
+		main: mainEl,
 		canvas: canvas,
 		color: tone === 'cpu' ? '#1677ff' : '#10b981',
 		percent: percentEl,
@@ -578,6 +839,10 @@ function infoRow(label, value) {
 }
 
 return view.extend({
+	handleSave: null,
+	handleSaveApply: null,
+	handleReset: null,
+
 	load: function() {
 		return Promise.all([
 			callSystemBoard().catch(function() { return {}; }),
@@ -604,14 +869,18 @@ return view.extend({
 		var cpuSnapshot = parseCpuStat(data[7] || '');
 		var mem = formatMemory(info);
 		var routerName = board.hostname || board.model || _('路由器');
+		var productLabel = productName(board);
 		var currentSource = currentMirror(distfeeds);
 		var cpuMetric = makeMetric(_('CPU 占用率'), 'cpu');
 		var memMetric = makeMetric(_('内存占用'), 'mem');
+		var tempCanvas = E('canvas', { 'class': 'home-temp-chart', 'width': '320', 'height': '96' });
+		var tempValueEl = E('strong', { 'class': 'home-temp-value' }, '-');
+		var tempEmptyEl = E('div', { 'class': 'home-temp-empty' }, _('未获取到 CPU 温度'));
+		var rxRateEl = E('strong', { 'class': 'home-rx' }, '0 B/s');
+		var txRateEl = E('strong', { 'class': 'home-tx' }, '0 B/s');
 		var chartW = 760;
 		var chartH = 220;
 		var chartCanvas = E('canvas', { 'class': 'home-chart', 'width': String(chartW), 'height': String(chartH) });
-		var rxRateEl = E('strong', { 'class': 'home-rx' }, '0 B/s');
-		var txRateEl = E('strong', { 'class': 'home-tx' }, '0 B/s');
 		var chartEmptyEl = E('div', { 'class': 'home-chart-empty' }, _('正在采集接口流量...'));
 		var sourceValue = E('div', { 'class': 'home-source-value' }, currentSource.label);
 		var sourceHint = E('div', { 'class': 'home-source-hint' }, '');
@@ -620,30 +889,57 @@ return view.extend({
 		var txHistory = [];
 		var displayRxHistory = [];
 		var displayTxHistory = [];
+		var tempHistory = [];
+		var displayTempHistory = [];
 		var timer = null;
 		var chartAnimFrame = null;
+		var tempAnimFrame = null;
 		var lastCounters = null;
 		var lastTs = Date.now();
 		var trafficDevicesCache = [];
+		var cpuThermalSensor = null;
 		var uptimeLabel = formatUptime(info.uptime);
 		var firmware = firmwareVersion(board);
 		var arch = systemArch(board);
 		var kernel = safeText(board.kernel);
 		var model = safeText(board.model);
 
+		cpuMetric.node.classList.add('home-metric-cpu');
+		cpuMetric.main.appendChild(E('div', { 'class': 'home-temp-block' }, [
+			E('div', { 'class': 'home-temp-head' }, [
+				E('span', { 'class': 'home-temp-title' }, _('CPU 温度')),
+				tempValueEl
+			]),
+			E('div', { 'class': 'home-temp-wrap' }, [
+				tempEmptyEl,
+				tempCanvas
+			])
+		]));
+
 		window.setTimeout(function() {
-			setMetric(cpuMetric, 0, _('等待采样'), _('实时 CPU 占用'));
+			setMetric(cpuMetric, 0, _('等待采样'), '');
 			setMetric(memMetric, mem.percent, mem.label, mem.subtitle);
 		}, 0);
 
+		discoverThermalSensors().then(function(sensors) {
+			cpuThermalSensor = sensors && sensors.cpu;
+
+			if (!cpuThermalSensor)
+				drawTempChart([]);
+			else
+				updateTemp(cpuThermalSensor.temp);
+		}).catch(function() {
+			drawTempChart([]);
+		});
+
 		function drawChart(rxValues, txValues) {
 			var peak = 1;
-			var hasData = false;
+			var hasTraffic = false;
 
 			for (var i = 0; i < rxValues.length; i++) {
-				peak = Math.max(peak, rxValues[i], txValues[i]);
-				if (rxValues[i] > 0 || txValues[i] > 0)
-					hasData = true;
+				peak = Math.max(peak, rxValues[i] || 0, txValues[i] || 0);
+				if ((rxValues[i] || 0) > 0 || (txValues[i] || 0) > 0)
+					hasTraffic = true;
 			}
 
 			var box = getCanvasBox(chartCanvas, chartW, chartH);
@@ -665,7 +961,7 @@ return view.extend({
 			});
 			ctx.setLineDash([]);
 
-			if (!hasData) {
+			if (!hasTraffic) {
 				chartEmptyEl.style.display = 'flex';
 				return;
 			}
@@ -673,6 +969,42 @@ return view.extend({
 			chartEmptyEl.style.display = 'none';
 			drawSeries(ctx, rxValues, peak, width, height, '#1677ff', 'rgba(22,119,255,.12)', '#1677ff');
 			drawSeries(ctx, txValues, peak, width, height, '#ff8a1f', 'rgba(255,138,31,.10)', '#ff8a1f');
+		}
+
+		function drawTempChart(values) {
+			var box = getCanvasBox(tempCanvas, 320, 96);
+			if (!box)
+				return;
+
+			var ctx = box.ctx;
+			var width = box.width;
+			var height = box.height;
+			var min = 999;
+			var hasData = false;
+
+			for (var i = 0; i < values.length; i++) {
+				min = Math.min(min, values[i]);
+				if (values[i] > 0)
+					hasData = true;
+			}
+
+			if (!hasData) {
+				tempEmptyEl.style.display = 'flex';
+				return;
+			}
+
+			tempEmptyEl.style.display = 'none';
+			ctx.strokeStyle = 'rgba(255,107,53,.10)';
+			ctx.lineWidth = 1;
+			ctx.setLineDash([3, 5]);
+			[Math.round(height * 0.3), Math.round(height * 0.6)].forEach(function(y) {
+				ctx.beginPath();
+				ctx.moveTo(0, y);
+				ctx.lineTo(width, y);
+				ctx.stroke();
+			});
+			ctx.setLineDash([]);
+			drawTempSeries(ctx, values, width, height);
 		}
 
 		function animateChart() {
@@ -722,6 +1054,45 @@ return view.extend({
 			chartAnimFrame = window.requestAnimationFrame(frame);
 		}
 
+		function animateTempChart() {
+			var from = displayTempHistory.slice();
+			var to = tempHistory.slice();
+			var duration = 720;
+			var start = null;
+
+			while (from.length < to.length)
+				from.unshift(to[0] || 0);
+
+			if (tempAnimFrame)
+				window.cancelAnimationFrame(tempAnimFrame);
+
+			function ease(t) {
+				return 1 - Math.pow(1 - t, 3);
+			}
+
+			function frame(now) {
+				if (start == null)
+					start = now;
+
+				var p = Math.min(1, (now - start) / duration);
+				var e = ease(p);
+				var next = [];
+
+				for (var i = 0; i < to.length; i++)
+					next.push(from[i] + (to[i] - from[i]) * e);
+
+				displayTempHistory = next;
+				drawTempChart(displayTempHistory);
+
+				if (p < 1)
+					tempAnimFrame = window.requestAnimationFrame(frame);
+				else
+					tempAnimFrame = null;
+			}
+
+			tempAnimFrame = window.requestAnimationFrame(frame);
+		}
+
 		function repaintChart(rxRate, txRate) {
 			rxRateEl.textContent = formatRate(rxRate);
 			txRateEl.textContent = formatRate(txRate);
@@ -734,6 +1105,18 @@ return view.extend({
 				txHistory.shift();
 
 			animateChart();
+		}
+
+		function updateTemp(temp) {
+			tempValueEl.textContent = formatTemp(temp);
+			if (temp == null)
+				return;
+
+			tempHistory.push(temp);
+			if (tempHistory.length > maxPoints)
+				tempHistory.shift();
+
+			animateTempChart();
 		}
 
 		function updateMirrorButtons(activeUrl, buttons) {
@@ -777,7 +1160,7 @@ return view.extend({
 		updateMirrorButtons(currentSource.url, sourceButtons);
 
 		var style = E('style', {}, '\
-.home-dashboard{--bg:#f4f7fb;--surface:#ffffff;--surface-alt:#f8fbff;--line:#dbe5f0;--text:#142033;--muted:#607086;--accent:#1677ff;--accent-2:#10b981;--accent-3:#ff8a1f;display:flex;flex-direction:column;gap:24px;color:var(--text);max-width:1480px;margin:0 auto;padding:12px 8px 28px;background:linear-gradient(180deg,#f7f9fc 0%,#f2f6fb 100%);}\
+.home-dashboard{--bg:#f4f7fb;--surface:#ffffff;--surface-alt:#f8fbff;--line:#dbe5f0;--text:#142033;--muted:#607086;--accent:#1677ff;--accent-2:#10b981;--accent-3:#ff8a1f;display:flex;flex-direction:column;gap:24px;color:var(--text);max-width:1480px;margin:0 auto;padding:12px 8px 28px;background:transparent;}\
 .home-card,.home-metric,.home-source-panel,.home-hero,.home-panel{background:var(--surface);border:1px solid rgba(20,32,51,.06);box-shadow:0 18px 48px rgba(15,23,42,.08);border-radius:28px;}\
 .home-hero{position:relative;overflow:hidden;padding:34px 34px 30px;background:linear-gradient(135deg,#0f172a 0%,#13233a 45%,#17385f 100%);color:#f8fbff;}\
 .home-hero:before{content:\"\";position:absolute;right:-120px;top:-120px;width:280px;height:280px;border-radius:50%;background:radial-gradient(circle,rgba(56,189,248,.28),rgba(56,189,248,0));}\
@@ -796,9 +1179,12 @@ return view.extend({
 .home-panel-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px;}\
 .home-panel-title{margin:0;font-size:20px;font-weight:800;color:var(--text);}\
 .home-panel-note{font-size:13px;color:var(--muted);}\
-.home-traffic-rate{display:flex;gap:16px;flex-wrap:wrap;font-size:14px;color:var(--muted);}\
-.home-rx{color:var(--accent);font-size:20px;}\
-.home-tx{color:var(--accent-3);font-size:20px;}\
+.home-traffic-rate{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;min-width:min(100%,420px);}\
+.home-wifi-info-chip{padding:12px 14px;border-radius:18px;background:linear-gradient(180deg,#fbfdff 0%,#f4f8ff 100%);border:1px solid rgba(20,32,51,.08);}\
+.home-wifi-info-key{display:block;font-size:12px;color:var(--muted);}\
+.home-wifi-info-value{display:block;margin-top:6px;font-size:18px;font-weight:800;line-height:1.2;color:var(--text);word-break:break-word;}\
+.home-rx{display:block;margin-top:6px;font-size:18px;font-weight:800;line-height:1.2;color:var(--accent);}\
+.home-tx{display:block;margin-top:6px;font-size:18px;font-weight:800;line-height:1.2;color:var(--accent-3);}\
 .home-chart-wrap{position:relative;height:300px;padding:16px;border-radius:24px;background:linear-gradient(180deg,#f8fbff 0%,#eef5ff 100%);border:1px solid rgba(22,119,255,.08);}\
 .home-chart{width:100%;height:100%;display:block;}\
 .home-chart-empty{position:absolute;inset:16px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:13px;color:var(--muted);border-radius:18px;background:rgba(255,255,255,.78);}\
@@ -815,17 +1201,30 @@ return view.extend({
 .home-metric-text{min-width:0;flex:1;}\
 .home-metric-value{font-size:28px;font-weight:800;line-height:1.15;word-break:break-word;color:var(--text);}\
 .home-metric-sub{margin-top:8px;font-size:13px;color:var(--muted);line-height:1.6;}\
+.home-metric-cpu .home-metric-main{align-items:center;}\
+.home-metric-cpu .home-metric-text{display:none;}\
+.home-temp-block{margin-top:18px;padding-top:16px;border-top:1px solid rgba(20,32,51,.08);}\
+.home-temp-head{display:flex;align-items:center;justify-content:space-between;gap:12px;}\
+.home-temp-title{font-size:12px;color:var(--muted);letter-spacing:.04em;}\
+.home-temp-value{font-size:19px;font-weight:800;color:#ff6b35;}\
+.home-temp-wrap{position:relative;margin-top:12px;height:96px;border-radius:18px;background:linear-gradient(180deg,#fffdfb 0%,#fff5ef 100%);border:1px solid rgba(255,107,53,.14);overflow:hidden;box-shadow:inset 0 1px 0 rgba(255,255,255,.85);}\
+.home-temp-chart{width:100%;height:100%;display:block;}\
+.home-temp-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted);background:rgba(255,255,255,.72);}\
+.home-metric-cpu .home-ring-wrap{align-self:center;}\
+.home-metric-cpu .home-temp-block{margin-top:-10%;padding-top:0;border-top:none;flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;align-self:center;}\
+.home-metric-cpu .home-temp-head{min-height:24px;align-items:center;}\
+.home-metric-cpu .home-temp-wrap{margin-top:2px;height:88px;}\
 .home-source-panel{padding:24px 26px 26px;background:linear-gradient(180deg,#ffffff 0%,#f9fbff 100%);}\
 .home-source-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;}\
 .home-source-title{font-size:18px;font-weight:800;color:var(--text);}\
 .home-source-value{margin-top:6px;font-size:30px;font-weight:800;letter-spacing:-.03em;color:var(--text);}\
 .home-source-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px;}\
-.home-source-btn{appearance:none;border:none;border-radius:999px;padding:12px 18px;background:#eef4fb;color:#10213a;font-weight:700;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(20,32,51,.08);transition:background .2s ease,color .2s ease,transform .2s ease,box-shadow .2s ease;}\
+.home-source-btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:999px;padding:12px 18px;background:#eef4fb;color:#10213a;font-weight:700;line-height:1;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(20,32,51,.08);transition:background .2s ease,color .2s ease,transform .2s ease,box-shadow .2s ease;}\
 .home-source-btn.is-active{background:linear-gradient(135deg,#1677ff,#4096ff);color:#fff;transform:translateY(-1px);box-shadow:0 10px 24px rgba(22,119,255,.22);}\
 .home-source-btn:disabled{opacity:.6;cursor:not-allowed;}\
 .home-source-hint{min-height:20px;margin-top:14px;font-size:12px;color:var(--muted);line-height:1.6;}\
 @media (max-width: 1220px){.home-dashboard{padding:10px 6px 24px;}.home-hero-inner,.home-main-grid{grid-template-columns:1fr;}.home-side-stack{grid-template-columns:repeat(2,minmax(0,1fr));}}\
-@media (max-width: 780px){.home-dashboard{gap:18px;padding:4px 0 20px;}.home-hero,.home-panel,.home-metric,.home-source-panel{border-radius:22px;padding:20px;}.home-title{font-size:30px;}.home-subtitle{font-size:14px;}.home-summary-grid,.home-side-stack{grid-template-columns:1fr;}.home-panel-head,.home-source-head{flex-direction:column;align-items:flex-start;}.home-traffic-rate{gap:10px;}.home-chart-wrap{height:220px;padding:12px;}.home-ring-wrap{width:104px;height:104px;flex-basis:104px;}.home-ring-core{inset:15px;}.home-source-actions{flex-direction:column;}.home-source-btn{width:100%;justify-content:center;}}\
+@media (max-width: 780px){.home-dashboard{gap:18px;padding:4px 0 20px;}.home-hero,.home-panel,.home-metric,.home-source-panel{border-radius:22px;padding:20px;}.home-title{font-size:30px;}.home-subtitle{font-size:14px;}.home-summary-grid,.home-side-stack{grid-template-columns:1fr;}.home-panel-head,.home-source-head{flex-direction:column;align-items:flex-start;}.home-traffic-rate{grid-template-columns:1fr;gap:10px;min-width:0;width:100%;}.home-chart-wrap{height:220px;padding:12px;}.home-ring-wrap{width:104px;height:104px;flex-basis:104px;}.home-ring-core{inset:15px;}.home-metric-cpu .home-metric-main{flex-direction:column;align-items:flex-start;}.home-metric-cpu .home-metric-text{flex:1;min-width:0;}.home-metric-cpu .home-temp-block{width:100%;}.home-source-actions{flex-direction:column;}.home-source-btn{width:100%;justify-content:center;}}\
 ');
 
 		var node = E('div', { 'class': 'home-dashboard' }, [
@@ -833,7 +1232,7 @@ return view.extend({
 			E('section', { 'class': 'home-hero' }, [
 				E('div', { 'class': 'home-hero-inner' }, [
 					E('div', {}, [
-						E('div', { 'class': 'home-eyebrow' }, routerName),
+						E('div', { 'class': 'home-eyebrow' }, productLabel),
 						E('div', { 'class': 'home-title' }, routerName),
 						E('div', { 'class': 'home-subtitle' }, [
 							_('固件版本') + ' ' + firmware,
@@ -868,8 +1267,14 @@ return view.extend({
 					E('div', { 'class': 'home-panel-head' }, [
 						E('h3', { 'class': 'home-panel-title' }, _('实时流量')),
 						E('div', { 'class': 'home-traffic-rate' }, [
-							E('span', {}, [_('下行'), ' ', rxRateEl]),
-							E('span', {}, [_('上行'), ' ', txRateEl])
+							E('div', { 'class': 'home-wifi-info-chip' }, [
+								E('span', { 'class': 'home-wifi-info-key' }, _('下行')),
+								rxRateEl
+							]),
+							E('div', { 'class': 'home-wifi-info-chip' }, [
+								E('span', { 'class': 'home-wifi-info-key' }, _('上行')),
+								txRateEl
+							])
 						])
 					]),
 					E('div', { 'class': 'home-chart-wrap' }, [
@@ -900,13 +1305,16 @@ return view.extend({
 		]);
 
 		function tick() {
+			var cpuThermalJob = cpuThermalSensor ? fs.read(cpuThermalSensor.path).catch(function() { return null; }) : Promise.resolve(null);
+
 			return Promise.all([
 				callIfaceStatus('wan').catch(function() { return {}; }),
 				callIfaceStatus('lan').catch(function() { return {}; }),
 				callIfaceStatus('wan6').catch(function() { return {}; }),
 				callIfaceStatus('wwan').catch(function() { return {}; }),
 				callSystemInfo().catch(function() { return {}; }),
-				fs.read('/proc/stat').catch(function() { return ''; })
+				fs.read('/proc/stat').catch(function() { return ''; }),
+				cpuThermalJob
 			]).then(function(nextData) {
 				var nextStatuses = {
 					wan: nextData[0] || {},
@@ -916,20 +1324,22 @@ return view.extend({
 				};
 				var nextInfo = nextData[4] || {};
 				var nextCpu = parseCpuStat(nextData[5] || '');
-				var now = Date.now();
-				var dt = (now - lastTs) / 1000;
+				var nextCpuTemp = normalizeTemp(nextData[6]);
 				var nextMem = formatMemory(nextInfo);
 				var usage = calcCpuPercent(cpuSnapshot, nextCpu);
+				var now = Date.now();
+				var dt = (now - lastTs) / 1000;
 
 				if (!cpuSnapshot && nextCpu)
 					cpuSnapshot = nextCpu;
 
 				if (usage != null) {
 					cpuSnapshot = nextCpu;
-					setMetric(cpuMetric, usage, usage + '%', _('实时 CPU 占用'));
+					setMetric(cpuMetric, usage, usage + '%', '');
 				}
 
 				setMetric(memMetric, nextMem.percent, nextMem.label, nextMem.subtitle);
+				updateTemp(nextCpuTemp);
 
 				return resolveTrafficCounters(nextStatuses, trafficDevicesCache).then(function(curCounters) {
 					trafficDevicesCache = curCounters.devices || trafficDevicesCache;
@@ -963,12 +1373,14 @@ return view.extend({
 			lastTs = Date.now();
 		});
 
-		repaintChart(0, 0);
+		drawChart([], [], []);
 		tick();
 		timer = window.setInterval(tick, 2000);
 		node.addEventListener('remove', function() {
 			if (chartAnimFrame)
 				window.cancelAnimationFrame(chartAnimFrame);
+			if (tempAnimFrame)
+				window.cancelAnimationFrame(tempAnimFrame);
 			if (timer)
 				window.clearInterval(timer);
 		});

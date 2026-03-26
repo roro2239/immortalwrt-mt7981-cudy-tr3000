@@ -23,6 +23,12 @@
         ],
         "/sys/class/net/*/statistics/tx_bytes": [
           "read"
+        ],
+        "/sys/class/thermal/thermal_zone*/temp": [
+          "read"
+        ],
+        "/sys/class/thermal/thermal_zone*/type": [
+          "read"
         ]
       }
     },
