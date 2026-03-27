@@ -113,6 +113,7 @@ do_request() {
 	local cookie_header="$4"
 	local method="$5"
 	local content_type="$6"
+	local post_body=""
 
 	RESP_FILE="$(mktemp)"
 	HDR_FILE="$(mktemp)"
@@ -130,7 +131,8 @@ do_request() {
 
 	if [ "$method" = "POST" ] || [ "$method" = "PUT" ]; then
 		if [ -n "$BODY_FILE" ] && [ -s "$BODY_FILE" ]; then
-			set -- "$@" "--post-file=$BODY_FILE"
+			post_body="$(cat "$BODY_FILE")"
+			set -- "$@" "--post-data=$post_body"
 		else
 			set -- "$@" "--post-data="
 		fi

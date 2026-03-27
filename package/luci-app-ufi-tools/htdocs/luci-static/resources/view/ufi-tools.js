@@ -196,6 +196,9 @@ function stateFactory() {
 		smsList: [],
 		error: '',
 		logs: [],
+		rawLogs: [],
+		logSessionTitle: '',
+		interactiveLogActive: false,
 		timer: null
 	};
 }
@@ -205,6 +208,9 @@ var rootEl = null;
 var els = {};
 
 function pushLog(level, message) {
+	if (!state.interactiveLogActive)
+		return;
+
 	var item = {
 		time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
 		level: String(level || 'INFO').toUpperCase(),
@@ -216,6 +222,38 @@ function pushLog(level, message) {
 		state.logs.length = 120;
 
 	renderLogs();
+}
+
+function pushRawLog(action, status, raw) {
+	if (!state.interactiveLogActive)
+		return;
+
+	var item = {
+		time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+		action: text(action, '-'),
+		status: text(status, '-'),
+		raw: text(raw, '')
+	};
+
+	state.rawLogs.unshift(item);
+	if (state.rawLogs.length > 80)
+		state.rawLogs.length = 80;
+
+	renderRawLogs();
+}
+
+function startInteractiveLog(title) {
+	state.logs = [];
+	state.rawLogs = [];
+	state.logSessionTitle = text(title, '功能日志');
+	state.interactiveLogActive = true;
+	renderLogs();
+	renderRawLogs();
+	openPanel('logs');
+}
+
+function stopInteractiveLog() {
+	state.interactiveLogActive = false;
 }
 
 function buildHeaders(method, signPath, extra) {
@@ -287,6 +325,7 @@ function requestJson(path, options) {
 
 		return res.text().then(function(body) {
 			if (!body) {
+				pushRawLog(path, 'HTTP ' + res.status, '[EMPTY]');
 				if (path.indexOf('cmd=LD') >= 0)
 					pushLog('WARN', 'LD 响应为空');
 				return {};
@@ -294,6 +333,7 @@ function requestJson(path, options) {
 
 			try {
 				var data = JSON.parse(body);
+				pushRawLog(path, 'HTTP ' + res.status, body.slice(0, 320));
 
 				if (path.indexOf('cmd=LD') >= 0) {
 					if (data && data.LD)
@@ -309,6 +349,47 @@ function requestJson(path, options) {
 				throw new Error('响应解析失败：' + body.slice(0, 240));
 			}
 		});
+	});
+}
+
+function parseOptionalJsonResponse(res, actionLabel) {
+	return res.text().then(function(body) {
+		if (actionLabel)
+			pushLog('INFO', actionLabel + '：HTTP ' + res.status);
+
+		if (!res.ok) {
+			pushRawLog(actionLabel || '写操作', 'HTTP ' + res.status, text(body, '[EMPTY]').slice(0, 320));
+			if (actionLabel)
+				pushLog('WARN', actionLabel + '：响应异常 -> ' + text(body, 'HTTP ' + res.status));
+			throw new Error(text(body, 'HTTP ' + res.status));
+		}
+
+		if (!body) {
+			pushRawLog(actionLabel || '写操作', 'HTTP ' + res.status, '[EMPTY]');
+			if (actionLabel)
+				pushLog('INFO', actionLabel + '：响应为空');
+			return { __empty: true, __status: res.status, __raw: '' };
+		}
+
+		try {
+			var data = JSON.parse(body);
+			pushRawLog(actionLabel || '写操作', 'HTTP ' + res.status, body.slice(0, 320));
+
+			if (data && typeof data === 'object') {
+				data.__status = res.status;
+				data.__raw = body;
+			}
+
+			if (actionLabel)
+				pushLog('INFO', actionLabel + '：响应摘要 -> ' + body.slice(0, 240));
+
+			return data;
+		}
+		catch (err) {
+			if (actionLabel)
+				pushLog('WARN', actionLabel + '：响应解析失败 -> ' + body.slice(0, 240));
+			throw new Error('响应解析失败：' + body.slice(0, 240));
+		}
 	});
 }
 
@@ -359,7 +440,7 @@ function processAD(cookie) {
 		if (!info.wa_inner_version || !info.cr_version || !rdData.RD)
 			throw new Error('无法生成 AD');
 
-		return sha256Hex(sha256Hex(info.wa_inner_version + info.cr_version) + rdData.RD);
+		return sha256HexUpper(sha256HexUpper(info.wa_inner_version + info.cr_version) + rdData.RD);
 	});
 }
 
@@ -447,6 +528,28 @@ function logout() {
 	});
 }
 
+function logoutWithCookie(cookie) {
+	if (!cookie)
+		return Promise.resolve();
+
+	return processAD(cookie).then(function(ad) {
+		var body = new URLSearchParams({
+			goformId: 'LOGOUT',
+			isTest: 'false',
+			AD: ad
+		});
+
+		return request('/goform/goform_set_cmd_process', {
+			method: 'POST',
+			signPath: '/goform/goform_set_cmd_process',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'kano-cookie': cookie },
+			body: body
+		});
+	}).catch(function() {
+		return null;
+	});
+}
+
 function getData(params) {
 	var query = params instanceof URLSearchParams ? params : new URLSearchParams(params || {});
 	query.append('isTest', 'false');
@@ -464,6 +567,11 @@ function postData(data) {
 			AD: ad
 		}));
 
+		if (data && data.goformId === 'SEND_SMS') {
+			pushRawLog('发送短信请求', 'FORM', body.toString().slice(0, 400));
+			pushLog('INFO', '发送短信：表单已构造');
+		}
+
 		return request('/goform/goform_set_cmd_process', {
 			method: 'POST',
 			signPath: '/goform/goform_set_cmd_process',
@@ -472,7 +580,7 @@ function postData(data) {
 				'kano-cookie': state.cookie
 			},
 			body: body
-		}).then(function(res) { return res.json(); });
+		});
 	});
 }
 
@@ -534,11 +642,169 @@ function getSmsInfo(page, pageSize) {
 	});
 }
 
+function delay(ms) {
+	return new Promise(function(resolve) {
+		window.setTimeout(resolve, Number(ms) || 0);
+	});
+}
+
+function normalizePhoneNumber(number) {
+	return text(number, '')
+		.replace(/[\s\-()]/g, '')
+		.replace(/^\+86/, '')
+		.replace(/^86/, '')
+		.trim();
+}
+
+function getSmsTagMeta(tag) {
+	var value = text(tag, '');
+
+	if (value === '3') {
+		return {
+			direction: 'out',
+			status: 'failed',
+			label: '发送失败'
+		};
+	}
+
+	if (value === '2') {
+		return {
+			direction: 'out',
+			status: 'sent',
+			label: '已发送'
+		};
+	}
+
+	if (value === '1') {
+		return {
+			direction: 'in',
+			status: 'received',
+			label: '未读'
+		};
+	}
+
+	return {
+		direction: 'in',
+		status: 'recorded',
+		label: '已记录'
+	};
+}
+
+function verifySmsSendResult(number, content) {
+	var attempts = 5;
+	var index = 0;
+	var targetNumber = normalizePhoneNumber(number);
+	var targetContent = text(content, '').trim();
+
+	function inspectMessages(messages) {
+		var list = Array.isArray(messages) ? messages : [];
+		var matched = list.find(function(item) {
+			var itemNumber = normalizePhoneNumber(item && item.number);
+			var itemContent = text(decodeBase64(item && item.content || ''), '').trim();
+			return itemNumber === targetNumber && itemContent === targetContent;
+		});
+
+		if (!matched)
+			return null;
+
+		return {
+			id: matched.id,
+			tag: text(matched.tag, ''),
+			number: text(matched.number, ''),
+			content: text(decodeBase64(matched.content || ''), '')
+		};
+	}
+
+	function run() {
+		index += 1;
+		pushLog('INFO', '发送短信：响应为空，开始校验结果，第 ' + index + ' 次');
+		return getSmsInfo(0, 50).then(function(res) {
+			var matched = inspectMessages(res && res.messages);
+
+			if (matched) {
+				var meta = getSmsTagMeta(matched.tag);
+
+				pushRawLog('发送短信校验', '匹配短信', JSON.stringify({
+					id: matched.id,
+					tag: matched.tag,
+					status: meta.status,
+					number: matched.number,
+					content: matched.content
+				}));
+
+				if (meta.status === 'failed')
+					throw new Error('短信发送失败：设备标记为发送失败');
+
+				if (meta.status === 'sent') {
+					pushLog('INFO', '发送短信：已确认成功');
+					return {
+						result: 'success',
+						verified: true,
+						tag: matched.tag
+					};
+				}
+
+				pushLog('WARN', '发送短信：设备已记录短信，但未最终确认');
+				return {
+					result: 'pending',
+					verified: true,
+					tag: matched.tag,
+					message: '设备已记录短信，但未最终确认'
+				};
+			}
+
+			pushRawLog('发送短信校验', '未匹配', JSON.stringify({
+				attempt: index,
+				targetNumber: targetNumber,
+				targetContent: targetContent.slice(0, 80),
+				messageCount: Array.isArray(res && res.messages) ? res.messages.length : 0
+			}));
+
+			if (index >= attempts)
+				throw new Error('短信接口返回空响应，且未确认到发送结果');
+
+			return delay(1000).then(run);
+		});
+	}
+
+	return run();
+}
+
 function sendSms(number, content) {
-	return postData({
-		goformId: 'SEND_SMS',
-		Number: number,
-		MessageBody: gsmEncode(content)
+	var originalCookie = state.cookie;
+	var tempCookie = '';
+
+	pushLog('INFO', '发送短信：开始建立临时会话');
+	return login().then(function(cookie) {
+		var previousCookie = originalCookie;
+		var body;
+
+		tempCookie = cookie || state.cookie;
+		if (!tempCookie)
+			throw new Error('短信发送前登录失败');
+
+		pushLog('INFO', '发送短信：临时会话已建立');
+		state.cookie = tempCookie;
+		body = {
+			goformId: 'SEND_SMS',
+			Number: number,
+			MessageBody: gsmEncode(content)
+		};
+
+		return postData(body).then(function(res) {
+			return parseOptionalJsonResponse(res, '发送短信');
+		}).then(function(result) {
+			if (result && result.__empty)
+				return verifySmsSendResult(number, content);
+			return result;
+		}).finally(function() {
+			state.cookie = previousCookie;
+		});
+	}).finally(function() {
+		state.cookie = originalCookie;
+		return logoutWithCookie(tempCookie).finally(function() {
+			state.cookie = originalCookie;
+		});
 	});
 }
 
@@ -547,6 +813,8 @@ function deleteSms(id) {
 		goformId: 'DELETE_SMS',
 		msg_id: id,
 		notCallback: true
+	}).then(function(res) {
+		return parseOptionalJsonResponse(res, '删除短信');
 	});
 }
 
@@ -556,6 +824,8 @@ function markSmsRead(ids) {
 			goformId: 'SET_MSG_READ',
 			msg_id: id,
 			notCallback: true
+		}).then(function(res) {
+			return parseOptionalJsonResponse(res, '短信标已读');
 		}).catch(function() { return null; });
 	});
 
@@ -713,6 +983,8 @@ function openPanel(name) {
 		panel.hidden = panel.dataset.panel !== name;
 	});
 	rootEl.querySelector('.ufi-modal-wrap').hidden = false;
+	if (els.logPanelTitle && name === 'logs')
+		els.logPanelTitle.textContent = text(state.logSessionTitle, '功能日志');
 }
 
 function closePanels() {
@@ -780,9 +1052,10 @@ function renderSms() {
 	smsList.slice().sort(function(a, b) {
 		return String(b.date || '').localeCompare(String(a.date || ''));
 	}).forEach(function(item) {
-		var row = E('div', { 'class': 'ufi-sms-item ' + (String(item.tag) === '1' ? 'is-in' : 'is-out') }, [
+		var meta = getSmsTagMeta(item.tag);
+		var row = E('div', { 'class': 'ufi-sms-item ' + (meta.direction === 'in' ? 'is-in' : 'is-out') }, [
 			E('div', { 'class': 'ufi-sms-head' }, [
-				E('strong', {}, text(item.number, '-')),
+				E('strong', {}, text(item.number, '-') + (meta.label ? ' · ' + meta.label : '')),
 				E('span', {}, parseDateText(item.date))
 			]),
 			E('div', { 'class': 'ufi-sms-body' }, decodeBase64(item.content || '')),
@@ -959,6 +1232,7 @@ function withTimeout(promise, ms, message) {
 }
 
 function connectBackend() {
+	startInteractiveLog('连接后台日志');
 	state.connecting = true;
 	state.error = '';
 	pushLog('INFO', '开始连接后台');
@@ -1024,6 +1298,7 @@ function connectBackend() {
 		showToast(state.error, 'error');
 	}).finally(function() {
 		state.connecting = false;
+		stopInteractiveLog();
 		renderSummary();
 	});
 }
@@ -1076,10 +1351,12 @@ function bindEvents() {
 	});
 
 	els.smsSendBtn.addEventListener('click', function() {
+		startInteractiveLog('短信发送日志');
 		var number = els.smsPhone.value.trim();
 		var content = els.smsContent.value.trim();
 
 		if (!number || !content) {
+			stopInteractiveLog();
 			showToast('手机号和短信内容不能为空', 'error');
 			return;
 		}
@@ -1091,9 +1368,26 @@ function bindEvents() {
 				return loadSms();
 			}
 
-			throw new Error(text(res && res.message, '短信发送失败'));
+			if (res && res.result === 'pending') {
+				els.smsContent.value = '';
+				showToast(text(res.message, '设备已记录短信，但未最终确认'), 'info');
+				return loadSms();
+			}
+
+			if (res && res.message)
+				throw new Error('短信发送失败：' + res.message);
+
+			if (res && hasText(res.result))
+				throw new Error('短信发送失败：result=' + res.result);
+
+			if (res && hasText(res.__raw))
+				throw new Error('短信发送失败：' + String(res.__raw).slice(0, 120));
+
+			throw new Error('短信发送失败：未返回有效结果');
 		}).catch(function(err) {
 			showToast(text(err.message, '短信发送失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
 		});
 	});
 
@@ -1106,10 +1400,13 @@ function bindEvents() {
 	});
 
 	els.apnApplyBtn.addEventListener('click', function() {
+		startInteractiveLog('APN 模式日志');
 		var isAuto = els.apnModeSelect.value === 'auto';
 		var index = Number(els.apnProfileSelect.value || 0);
 
 		switchAPNMode(isAuto, index).then(function(res) {
+			return parseOptionalJsonResponse(res, '切换 APN 模式');
+		}).then(function(res) {
 			if (res && res.result === 'success') {
 				showToast('APN 模式已应用', 'success');
 				return loadApn();
@@ -1118,10 +1415,13 @@ function bindEvents() {
 			throw new Error('APN 模式应用失败');
 		}).catch(function(err) {
 			showToast(text(err.message, 'APN 模式应用失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
 		});
 	});
 
 	els.apnSaveBtn.addEventListener('click', function() {
+		startInteractiveLog('APN 保存日志');
 		var index = Number(els.apnProfileSelect.value || parseProfiles(state.apnData || {}).length);
 		var data;
 
@@ -1129,11 +1429,14 @@ function bindEvents() {
 			data = makeAPNFormData(index);
 		}
 		catch (err) {
+			stopInteractiveLog();
 			showToast(text(err.message, 'APN 保存失败'), 'error');
 			return;
 		}
 
 		saveAPNProfile(data).then(function(res) {
+			return parseOptionalJsonResponse(res, '保存 APN 配置');
+		}).then(function(res) {
 			if (res && res.result === 'success') {
 				showToast('APN 已保存', 'success');
 				return loadApn();
@@ -1142,13 +1445,18 @@ function bindEvents() {
 			throw new Error('APN 保存失败');
 		}).catch(function(err) {
 			showToast(text(err.message, 'APN 保存失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
 		});
 	});
 
 	els.apnDeleteBtn.addEventListener('click', function() {
+		startInteractiveLog('APN 删除日志');
 		var index = Number(els.apnProfileSelect.value || 0);
 
 		deleteAPNProfile(index).then(function(res) {
+			return parseOptionalJsonResponse(res, '删除 APN 配置');
+		}).then(function(res) {
 			if (res && res.result === 'success') {
 				showToast('APN 已删除', 'success');
 				return loadApn();
@@ -1157,15 +1465,20 @@ function bindEvents() {
 			throw new Error('APN 删除失败');
 		}).catch(function(err) {
 			showToast(text(err.message, 'APN 删除失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
 		});
 	});
 
 	els.adbUsbBtn.addEventListener('click', function() {
+		startInteractiveLog('USB 调试日志');
 		getData({ cmd: 'usb_port_switch' }).then(function(res) {
 			return postData({
 				goformId: 'USB_PORT_SETTING',
 				usb_port_switch: String(res.usb_port_switch) === '1' ? '0' : '1'
 			});
+		}).then(function(res) {
+			return parseOptionalJsonResponse(res, '切换 USB 调试');
 		}).then(function(res) {
 			if (res && res.result === 'success') {
 				showToast('USB 调试状态已切换', 'success');
@@ -1175,10 +1488,13 @@ function bindEvents() {
 			throw new Error('USB 调试切换失败');
 		}).catch(function(err) {
 			showToast(text(err.message, 'USB 调试切换失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
 		});
 	});
 
 	els.adbWifiBtn.addEventListener('click', function() {
+		startInteractiveLog('网络 ADB 日志');
 		Promise.all([
 			adbWifiSettingGet(),
 			getData({ cmd: 'usb_port_switch' })
@@ -1207,6 +1523,8 @@ function bindEvents() {
 			throw new Error('网络 ADB 切换失败');
 		}).catch(function(err) {
 			showToast(text(err.message, '网络 ADB 切换失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
 		});
 	});
 
@@ -1226,7 +1544,7 @@ function collectEls() {
 		'statusText', 'statusHint',
 		'smsList', 'smsPhone', 'smsContent', 'smsSendBtn',
 		'apnMode', 'apnCurrent', 'apnProfileSelect', 'apnProfileName', 'apnName', 'apnUsername', 'apnPassword', 'apnAuth', 'apnPdp', 'apnModeSelect', 'apnLoadBtn', 'apnApplyBtn', 'apnSaveBtn', 'apnDeleteBtn',
-		'adbAlive', 'adbUsb', 'adbUsbBtn', 'adbWifiBtn', 'logList'
+		'adbAlive', 'adbUsb', 'adbUsbBtn', 'adbWifiBtn', 'logPanelTitle', 'logList', 'rawLogList'
 	].forEach(function(id) {
 		els[id] = rootEl.querySelector('#' + id);
 	});
@@ -1253,6 +1571,27 @@ function renderLogs() {
 	});
 }
 
+function renderRawLogs() {
+	var list = els.rawLogList;
+
+	if (!list)
+		return;
+
+	list.innerHTML = '';
+
+	if (!state.rawLogs.length) {
+		list.appendChild(E('div', { 'class': 'ufi-empty' }, '暂无功能调用日志'));
+		return;
+	}
+
+	state.rawLogs.forEach(function(item) {
+		list.appendChild(E('div', { 'class': 'ufi-log-item' }, [
+			E('div', { 'class': 'ufi-log-meta' }, item.time + ' [' + item.status + '] ' + item.action),
+			E('div', { 'class': 'ufi-log-body' }, item.raw || '[EMPTY]')
+		]));
+	});
+}
+
 function renderSkeleton() {
 	var root = E('div', { 'class': 'ufi-redraw-root' });
 
@@ -1271,8 +1610,8 @@ function renderSkeleton() {
 		+ '.ufi-empty{padding:32px 12px;text-align:center;color:var(--ufi-muted);}.ufi-apn-grid{display:grid;grid-template-columns:.8fr 1.2fr;gap:14px;}.ufi-apn-side{display:grid;gap:10px;}.ufi-note{font-size:12px;color:var(--ufi-muted);line-height:1.7;}.ufi-toast-wrap{position:fixed;top:82px;right:18px;display:grid;gap:10px;z-index:3000;}.ufi-toast{min-width:220px;max-width:360px;color:#fff;padding:12px 14px;border-radius:14px;box-shadow:0 16px 30px rgba(15,23,42,.18);transition:all .28s ease;}.ufi-toast.is-leaving{opacity:0;transform:translateY(-8px);}.ufi-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}.ufi-kv div{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);}.ufi-kv span{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}.ufi-kv strong{font-size:16px;}.ufi-log-list{display:grid;gap:10px;max-height:280px;overflow:auto;}.ufi-log-item{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);}.ufi-log-item.is-warn{border-left:4px solid #d97706;}.ufi-log-item.is-error{border-left:4px solid #b91c1c;}.ufi-log-item.is-info{border-left:4px solid #0f766e;}.ufi-log-meta{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}.ufi-log-text{font-size:13px;line-height:1.6;word-break:break-all;}'
 		+ '@media (max-width:1080px){.ufi-hero,.ufi-grid,.ufi-apn-grid{grid-template-columns:1fr;}.ufi-toolbar,.ufi-function-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}@media (max-width:640px){.ufi-shell{padding:0 10px;}.ufi-toolbar,.ufi-function-grid,.ufi-summary-list,.ufi-login-grid,.ufi-kv{grid-template-columns:1fr;}.ufi-modal-wrap{padding:10px;align-items:flex-end;}.ufi-panel{padding:14px;border-radius:22px;}.ufi-hero-title{font-size:24px;}}'
 		+ '</style>'
-		+ '<div class="ufi-shell"><section class="ufi-hero"><div class="ufi-card"><h1 class="ufi-hero-title">UFI-TOOLS</h1></div><div class="ufi-card"><div class="ufi-login-grid"><label class="ufi-field" id="tokenField"><span>UFI-TOOLS 口令</span><input id="token" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>口令模式</span><select id="tokenMode"><option value="auto">自动判断</option><option value="no_token">无 UFI-TOOLS 口令</option></select></label><label class="ufi-field"><span>某兴后台密码</span><input id="password" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>登录方式</span><select id="loginMethod"><option value="0">登录方式 1</option><option value="1">登录方式 2</option></select></label><div class="ufi-field"><span>口令模式</span><div class="ufi-badge" id="needTokenTag">检测中</div></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="connectBtn">连接后台</button><button class="cbi-button cbi-button-neutral" id="refreshBtn">刷新数据</button></div></div></section><section class="ufi-toolbar"><div class="ufi-card ufi-stat"><div class="ufi-stat-label">设备型号</div><div class="ufi-stat-value" id="sumModel">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">网络类型</div><div class="ufi-stat-value" id="sumNetwork">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">实时速率</div><div class="ufi-stat-value" id="sumSpeed">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">连接状态</div><div class="ufi-stat-value" id="statusText">未连接</div><div class="ufi-note" id="statusHint"></div></div></section><section class="ufi-grid"><div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>核心状态</h3></div><div class="ufi-summary-list"><div class="ufi-summary-item"><strong>运营商</strong><span id="sumProvider">-</span></div><div class="ufi-summary-item"><strong>信号</strong><span id="sumSignal">-</span></div><div class="ufi-summary-item"><strong>CPU 温度</strong><span id="sumTemp">-</span></div><div class="ufi-summary-item"><strong>电量</strong><span id="sumBattery">-</span></div><div class="ufi-summary-item"><strong>CPU 占用</strong><span id="sumCpu">-</span></div><div class="ufi-summary-item"><strong>内存占用</strong><span id="sumMem">-</span></div><div class="ufi-summary-item"><strong>WiFi 终端</strong><span id="sumWifi">-</span></div><div class="ufi-summary-item"><strong>ADB 状态</strong><span id="sumAdb">-</span></div></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>流量摘要</h3></div><div class="ufi-kv"><div><span>今日流量</span><strong id="sumDaily">-</strong></div><div><span>本月流量</span><strong id="sumMonthly">-</strong></div></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>连接日志</h3></div><div class="ufi-log-list" id="logList"></div></div></div><div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>功能入口</h3></div><div class="ufi-function-grid"><button class="ufi-function-btn" data-open-panel="sms">短信面板 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="apn">APN 管理 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="adb">ADB 设置 <span>↗</span></button></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>设备摘要</h3></div><div class="ufi-kv"><div><span>设备型号</span><strong id="sumModel2">-</strong></div><div><span>网络类型</span><strong id="sumNetwork2">-</strong></div><div><span>运营商</span><strong id="sumProvider2">-</strong></div><div><span>连接速率</span><strong id="sumSpeed2">-</strong></div></div></div></div></section></div>'
-		+ '<div class="ufi-modal-wrap" hidden><section class="ufi-panel" data-panel="sms" hidden><div class="ufi-panel-head"><h3>短信收发</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-field"><span>收件号码</span><input id="smsPhone" type="text" placeholder="手机号"></div><div class="ufi-field"><span>短信内容</span><textarea id="smsContent" rows="4" placeholder="输入短信内容"></textarea></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="smsSendBtn">发送短信</button></div><div class="ufi-sms-list" id="smsList"></div></section><section class="ufi-panel" data-panel="apn" hidden><div class="ufi-panel-head"><h3>APN 管理</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-apn-grid"><div class="ufi-apn-side"><div class="ufi-kv"><div><span>当前模式</span><strong id="apnMode">-</strong></div><div><span>当前 APN</span><strong id="apnCurrent">-</strong></div></div><label class="ufi-field"><span>模式切换</span><select id="apnModeSelect"><option value="auto">自动</option><option value="manual">手动</option></select></label><label class="ufi-field"><span>配置列表</span><select id="apnProfileSelect"></select></label><div class="ufi-actions"><button class="cbi-button cbi-button-neutral" id="apnLoadBtn">载入配置</button><button class="cbi-button cbi-button-action" id="apnApplyBtn">应用模式</button></div></div><div class="ufi-stack"><div class="ufi-field"><span>配置名称</span><input id="apnProfileName" type="text"></div><div class="ufi-field"><span>APN</span><input id="apnName" type="text"></div><div class="ufi-field"><span>用户名</span><input id="apnUsername" type="text"></div><div class="ufi-field"><span>密码</span><input id="apnPassword" type="text"></div><div class="ufi-login-grid"><label class="ufi-field"><span>鉴权方式</span><select id="apnAuth"><option value="none">NONE</option><option value="chap">CHAP</option><option value="pap">PAP</option></select></label><label class="ufi-field"><span>PDP 类型</span><select id="apnPdp"><option value="IP">IPv4</option><option value="IPv6">IPv6</option><option value="IPv4v6">IPv4v6</option></select></label></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="apnSaveBtn">保存配置</button><button class="cbi-button cbi-button-remove" id="apnDeleteBtn">删除配置</button></div></div></div></section><section class="ufi-panel" data-panel="adb" hidden><div class="ufi-panel-head"><h3>ADB 设置</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>ADB 就绪</span><strong id="adbAlive">-</strong></div><div><span>USB 调试</span><strong id="adbUsb">-</strong></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="adbUsbBtn">切换 USB 调试</button><button class="cbi-button cbi-button-neutral" id="adbWifiBtn">切换网络 ADB</button></div></section></div><div class="ufi-toast-wrap" id="toast"></div>';
+		+ '<div class="ufi-shell"><section class="ufi-hero"><div class="ufi-card"><h1 class="ufi-hero-title">UFI-TOOLS</h1></div><div class="ufi-card"><div class="ufi-login-grid"><label class="ufi-field" id="tokenField"><span>UFI-TOOLS 口令</span><input id="token" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>口令模式</span><select id="tokenMode"><option value="auto">自动判断</option><option value="no_token">无 UFI-TOOLS 口令</option></select></label><label class="ufi-field"><span>某兴后台密码</span><input id="password" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>登录方式</span><select id="loginMethod"><option value="0">登录方式 1</option><option value="1">登录方式 2</option></select></label><div class="ufi-field"><span>口令模式</span><div class="ufi-badge" id="needTokenTag">检测中</div></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="connectBtn">连接后台</button><button class="cbi-button cbi-button-neutral" id="refreshBtn">刷新数据</button></div></div></section><section class="ufi-toolbar"><div class="ufi-card ufi-stat"><div class="ufi-stat-label">设备型号</div><div class="ufi-stat-value" id="sumModel">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">网络类型</div><div class="ufi-stat-value" id="sumNetwork">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">实时速率</div><div class="ufi-stat-value" id="sumSpeed">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">连接状态</div><div class="ufi-stat-value" id="statusText">未连接</div><div class="ufi-note" id="statusHint"></div></div></section><section class="ufi-grid"><div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>核心状态</h3></div><div class="ufi-summary-list"><div class="ufi-summary-item"><strong>运营商</strong><span id="sumProvider">-</span></div><div class="ufi-summary-item"><strong>信号</strong><span id="sumSignal">-</span></div><div class="ufi-summary-item"><strong>CPU 温度</strong><span id="sumTemp">-</span></div><div class="ufi-summary-item"><strong>电量</strong><span id="sumBattery">-</span></div><div class="ufi-summary-item"><strong>CPU 占用</strong><span id="sumCpu">-</span></div><div class="ufi-summary-item"><strong>内存占用</strong><span id="sumMem">-</span></div><div class="ufi-summary-item"><strong>WiFi 终端</strong><span id="sumWifi">-</span></div><div class="ufi-summary-item"><strong>ADB 状态</strong><span id="sumAdb">-</span></div></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>流量摘要</h3></div><div class="ufi-kv"><div><span>今日流量</span><strong id="sumDaily">-</strong></div><div><span>本月流量</span><strong id="sumMonthly">-</strong></div></div></div></div><div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>功能入口</h3></div><div class="ufi-function-grid"><button class="ufi-function-btn" data-open-panel="sms">短信面板 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="apn">APN 管理 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="adb">ADB 设置 <span>↗</span></button></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>设备摘要</h3></div><div class="ufi-kv"><div><span>设备型号</span><strong id="sumModel2">-</strong></div><div><span>网络类型</span><strong id="sumNetwork2">-</strong></div><div><span>运营商</span><strong id="sumProvider2">-</strong></div><div><span>连接速率</span><strong id="sumSpeed2">-</strong></div></div></div></div></section></div>'
+		+ '<div class="ufi-modal-wrap" hidden><section class="ufi-panel" data-panel="sms" hidden><div class="ufi-panel-head"><h3>短信收发</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-field"><span>收件号码</span><input id="smsPhone" type="text" placeholder="手机号"></div><div class="ufi-field"><span>短信内容</span><textarea id="smsContent" rows="4" placeholder="输入短信内容"></textarea></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="smsSendBtn">发送短信</button></div><div class="ufi-sms-list" id="smsList"></div></section><section class="ufi-panel" data-panel="apn" hidden><div class="ufi-panel-head"><h3>APN 管理</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-apn-grid"><div class="ufi-apn-side"><div class="ufi-kv"><div><span>当前模式</span><strong id="apnMode">-</strong></div><div><span>当前 APN</span><strong id="apnCurrent">-</strong></div></div><label class="ufi-field"><span>模式切换</span><select id="apnModeSelect"><option value="auto">自动</option><option value="manual">手动</option></select></label><label class="ufi-field"><span>配置列表</span><select id="apnProfileSelect"></select></label><div class="ufi-actions"><button class="cbi-button cbi-button-neutral" id="apnLoadBtn">载入配置</button><button class="cbi-button cbi-button-action" id="apnApplyBtn">应用模式</button></div></div><div class="ufi-stack"><div class="ufi-field"><span>配置名称</span><input id="apnProfileName" type="text"></div><div class="ufi-field"><span>APN</span><input id="apnName" type="text"></div><div class="ufi-field"><span>用户名</span><input id="apnUsername" type="text"></div><div class="ufi-field"><span>密码</span><input id="apnPassword" type="text"></div><div class="ufi-login-grid"><label class="ufi-field"><span>鉴权方式</span><select id="apnAuth"><option value="none">NONE</option><option value="chap">CHAP</option><option value="pap">PAP</option></select></label><label class="ufi-field"><span>PDP 类型</span><select id="apnPdp"><option value="IP">IPv4</option><option value="IPv6">IPv6</option><option value="IPv4v6">IPv4v6</option></select></label></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="apnSaveBtn">保存配置</button><button class="cbi-button cbi-button-remove" id="apnDeleteBtn">删除配置</button></div></div></div></section><section class="ufi-panel" data-panel="adb" hidden><div class="ufi-panel-head"><h3>ADB 设置</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>ADB 就绪</span><strong id="adbAlive">-</strong></div><div><span>USB 调试</span><strong id="adbUsb">-</strong></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="adbUsbBtn">切换 USB 调试</button><button class="cbi-button cbi-button-neutral" id="adbWifiBtn">切换网络 ADB</button></div></section><section class="ufi-panel" data-panel="logs" hidden><div class="ufi-panel-head"><h3 id="logPanelTitle">功能日志</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-card"><div class="ufi-panel-head"><h3>连接日志</h3></div><div class="ufi-log-list" id="logList"></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>功能调用日志</h3></div><div class="ufi-log-list" id="rawLogList"></div></div></section></div><div class="ufi-toast-wrap" id="toast"></div>';
 
 	rootEl = root;
 	collectEls();
