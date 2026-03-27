@@ -7,3 +7,10 @@ docs/*
 !docs/usb-tethering-design.md
 !docs/ufi-tools-luci-design.md
 docs/full-build-acceleration.md
+.sdk-cache/
+_tmp_*/
+_tmp_*.sh
+=220
+home-dashboard.js
+luci-app-home-dashboard.json
+zz-home-dashboard-override.json
