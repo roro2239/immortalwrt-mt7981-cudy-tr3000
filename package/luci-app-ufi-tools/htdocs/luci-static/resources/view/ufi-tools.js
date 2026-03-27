@@ -7,7 +7,8 @@ var AUTH_TOKEN_KEY = 'ufi_tools_token_hash';
 var TOKEN_MODE_KEY = 'ufi_tools_token_mode';
 var PASSWORD_KEY = 'ufi_tools_backend_pwd';
 var LOGIN_METHOD_KEY = 'ufi_tools_login_method';
-var APP_RELEASE = 'r53';
+var APP_RELEASE = 'r62';
+var NATIVE_FETCH = window.fetch.bind(window);
 var REFRESH_MS = 5000;
 var DEFAULT_REQUEST_TIMEOUT = 15000;
 var CONNECT_TIMEOUT = 20000;
@@ -214,6 +215,25 @@ function stateFactory() {
 		adbAlive: false,
 		apnData: null,
 		smsList: [],
+		pluginList: [],
+		pluginText: '',
+		pluginExtraText: '',
+		pluginLoading: false,
+		pluginSaving: false,
+		pluginSelectedIndex: -1,
+		pluginEditorName: '',
+		pluginEditorContent: '',
+		pluginEditorDisabled: false,
+		pluginStoreItems: [],
+		pluginStoreDownloadUrl: '',
+		pluginStoreLoading: false,
+		pluginStoreKeyword: '',
+		pluginStorePage: 0,
+		pluginHostSource: '',
+		pluginHostLoading: false,
+		pluginHostReady: false,
+		pluginHostError: '',
+		pluginHostMountedCount: 0,
 		bandLockData: null,
 		neighborCells: [],
 		lockedCells: [],
@@ -232,6 +252,9 @@ function stateFactory() {
 var state = stateFactory();
 var rootEl = null;
 var els = {};
+var pluginHostSlots = {};
+var pluginHostCleanups = {};
+var pluginDataListeners = [];
 
 function pushLog(level, message) {
 	if (!state.interactiveLogActive)
@@ -323,7 +346,7 @@ function request(path, options) {
 	headers = buildHeaders(method, opts.signPath || path, opts.headers);
 	pushLog('INFO', '请求开始：' + requestLabel);
 
-	return fetch(PROXY_BASE + '?ufi_path=' + encodeURIComponent(path), {
+	return NATIVE_FETCH(PROXY_BASE + '?ufi_path=' + encodeURIComponent(path), {
 		method: method,
 		headers: headers,
 		body: opts.body,
@@ -439,6 +462,219 @@ function versionInfo() {
 		pushLog('INFO', '版本信息已加载');
 		return res;
 	});
+}
+
+function getCustomHead() {
+	return requestJson('/get_custom_head', {
+		signPath: '/api/get_custom_head'
+	}).then(function(res) {
+		return text(res && res.text, '');
+	});
+}
+
+function setCustomHead(content) {
+	return request('/set_custom_head', {
+		method: 'POST',
+		signPath: '/api/set_custom_head',
+		headers: {
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({
+			text: text(content, '')
+		})
+	}).then(function(res) {
+		return parseOptionalJsonResponse(res, '保存插件');
+	});
+}
+
+function getPluginStore() {
+	return requestJson('/plugins_store', {
+		signPath: '/api/plugins_store'
+	}).then(function(res) {
+		return res || {};
+	});
+}
+
+function proxyText(url) {
+	var remote = text(url, '').trim();
+	var path = '/proxy/--' + remote;
+
+	return request(path, {
+		method: 'GET',
+		signPath: '/api/proxy/--' + remote
+	}).then(function(res) {
+		if (!res.ok)
+			return res.text().then(function(body) {
+				throw new Error(text(body, '下载插件失败'));
+			});
+
+		return res.text();
+	});
+}
+
+function buildPluginCompatCommonHeaders() {
+	return {
+		referer: '/api/index.html',
+		host: '/api',
+		origin: '/api',
+		authorization: state.tokenMode !== 'no_token' ? text(state.tokenHash, '') : ''
+	};
+}
+
+function normalizePluginCompatHeaders(headers) {
+	var normalized = {};
+
+	if (!headers)
+		return normalized;
+
+	if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+		headers.forEach(function(value, key) {
+			normalized[key] = value;
+		});
+		return normalized;
+	}
+
+	if (Array.isArray(headers)) {
+		headers.forEach(function(entry) {
+			if (Array.isArray(entry) && entry.length >= 2)
+				normalized[entry[0]] = entry[1];
+		});
+		return normalized;
+	}
+
+	Object.keys(headers).forEach(function(key) {
+		normalized[key] = headers[key];
+	});
+
+	return normalized;
+}
+
+function pluginCompatFetch(input, init) {
+	var translated = translatePluginCompatFetchInput(input);
+	var opts = Object.assign({}, init || {});
+	var method = String(opts.method || 'GET').toUpperCase();
+	var headers = normalizePluginCompatHeaders(opts.headers);
+
+	if (translated.remotePath)
+		headers = buildHeaders(method, normalizePluginCompatSignPath(translated.remotePath), headers);
+
+	opts.headers = headers;
+	return NATIVE_FETCH(translated.input, opts);
+}
+
+function pluginCompatFetchWithTimeout(url, options, timeout) {
+	var controller = new AbortController();
+	var opts = Object.assign({}, options || {});
+	var headers = Object.assign({}, buildPluginCompatCommonHeaders(), normalizePluginCompatHeaders(opts.headers));
+	var timer = window.setTimeout(function() {
+		controller.abort();
+	}, Number(timeout) || 10000);
+
+	opts.signal = controller.signal;
+	opts.headers = headers;
+
+	return pluginCompatFetch(url, opts).finally(function() {
+		window.clearTimeout(timer);
+	});
+}
+
+function adbKeepAliveForPlugin() {
+	return requestJson('/adb_alive', {
+		signPath: '/api/adb_alive'
+	}).then(function(res) {
+		return String(res && res.result) === 'true';
+	}).catch(function() {
+		return false;
+	});
+}
+
+function runShellWithRootForPlugin(cmd, timeout) {
+	return requestJson('/root_shell', {
+		method: 'POST',
+		signPath: '/api/root_shell',
+		headers: {
+			'Content-Type': 'application/json'
+		},
+		timeout: Number(timeout) || 10000,
+		body: JSON.stringify({
+			command: text(cmd, '').trim(),
+			timeout: Number(timeout) || 10000
+		})
+	}).then(function(res) {
+		return res && res.error ? {
+			success: false,
+			content: text(res.error, '')
+		} : {
+			success: true,
+			content: text(res && res.result, '')
+		};
+	}).catch(function(err) {
+		return {
+			success: false,
+			content: text(err && err.message, '请求失败')
+		};
+	});
+}
+
+function runShellWithUserForPlugin(cmd, timeout) {
+	return requestJson('/user_shell', {
+		method: 'POST',
+		signPath: '/api/user_shell',
+		headers: {
+			'Content-Type': 'application/json'
+		},
+		timeout: Number(timeout) || 10000,
+		body: JSON.stringify({
+			command: text(cmd, '').trim(),
+			timeout: Number(timeout) || 10000
+		})
+	}).then(function(res) {
+		return res && res.error ? {
+			success: false,
+			content: text(res.error, '')
+		} : {
+			success: true,
+			content: text(res && res.result, '')
+		};
+	}).catch(function(err) {
+		return {
+			success: false,
+			content: text(err && err.message, '请求失败')
+		};
+	});
+}
+
+function checkAdvancedFuncForPlugin() {
+	return runShellWithRootForPlugin('whoami').then(function(res) {
+		return !!(res && res.content && String(res.content).indexOf('root') >= 0);
+	});
+}
+
+function requestIntervalForPlugin(callback, interval) {
+	var lastTime = 0;
+	var rafId = null;
+
+	function loop(timestamp) {
+		if (!lastTime)
+			lastTime = timestamp;
+
+		if (timestamp - lastTime >= (Number(interval) || 0)) {
+			try {
+				callback();
+			}
+			catch (err) {}
+			lastTime = timestamp;
+		}
+
+		rafId = window.requestAnimationFrame(loop);
+	}
+
+	rafId = window.requestAnimationFrame(loop);
+
+	return function() {
+		if (rafId)
+			window.cancelAnimationFrame(rafId);
+	};
 }
 
 function getLD() {
@@ -1452,6 +1688,15 @@ function openPanel(name) {
 		});
 		startSmsRefresh();
 		stopCellRefresh();
+	} else if (name === 'plugin') {
+		stopSmsRefresh();
+		stopCellRefresh();
+		renderPluginPanel();
+		if (!state.pluginStoreItems.length && !state.pluginStoreLoading) {
+			loadPluginStoreData().catch(function(err) {
+				showToast(text(err && err.message, '读取插件商店失败'), 'error');
+			});
+		}
 	} else if (name === 'network') {
 		loadNetworkLock().catch(function(err) {
 			showToast(text(err && err.message, '读取网络锁定信息失败'), 'error');
@@ -1657,10 +1902,11 @@ function renderSummary() {
 	els.tokenField.style.display = (state.needToken && state.tokenMode !== 'no_token') ? '' : 'none';
 	els.needTokenTag.textContent = state.tokenMode === 'no_token' ? '无口令模式' : (state.needToken ? '需要口令' : '无需口令');
 	syncExtraSummary();
+	syncPluginGlobals();
 }
 
 function renderSms() {
-	var list = els.smsList;
+	var list = els.smsThreadList;
 	var smsList = state.smsList || [];
 
 	list.innerHTML = '';
@@ -1860,6 +2106,8 @@ function withTimeout(promise, ms, message) {
 }
 
 function connectBackend() {
+	var job;
+
 	startInteractiveLog('连接后台日志');
 	state.connecting = true;
 	state.error = '';
@@ -1878,7 +2126,7 @@ function connectBackend() {
 		state.error = '请输入某兴后台密码';
 		pushLog('WARN', state.error);
 		renderSummary();
-		return;
+		return Promise.resolve(null);
 	}
 
 	if (state.tokenMode === 'no_token') {
@@ -1892,7 +2140,7 @@ function connectBackend() {
 			state.error = '请输入 UFI-TOOLS 口令';
 			pushLog('WARN', state.error);
 			renderSummary();
-			return;
+			return Promise.resolve(null);
 		}
 		if (token) {
 			state.tokenHash = sha256Hex(token);
@@ -1904,7 +2152,7 @@ function connectBackend() {
 		window.localStorage.removeItem(AUTH_TOKEN_KEY);
 	}
 
-	withTimeout(Promise.resolve().then(function() {
+	job = withTimeout(Promise.resolve().then(function() {
 		return login();
 	}).then(function() {
 		state.connected = true;
@@ -1915,6 +2163,11 @@ function connectBackend() {
 			loadApn()
 		]);
 	}), CONNECT_TIMEOUT, '连接超时').then(function() {
+		return loadPluginHost(true).catch(function(err) {
+			pushLog('WARN', '后台连接后插件重载失败：' + text(err && err.message, '未知错误'));
+			return null;
+		});
+	}).then(function() {
 		pushLog('INFO', '后台连接完成');
 		showToast('后台连接成功', 'success');
 		startRefresh();
@@ -1929,6 +2182,8 @@ function connectBackend() {
 		stopInteractiveLog();
 		renderSummary();
 	});
+
+	return job;
 }
 
 function disconnectBackend() {
@@ -1961,7 +2216,7 @@ function bindEvents() {
 
 	Array.prototype.forEach.call(rootEl.querySelectorAll('[data-open-panel]'), function(button) {
 		button.addEventListener('click', function() {
-			if (!state.connected) {
+			if (!state.connected && button.dataset.openPanel !== 'plugin') {
 				showToast('请先连接后台', 'error');
 				return;
 			}
@@ -2018,6 +2273,61 @@ function bindEvents() {
 			stopInteractiveLog();
 		});
 	});
+
+	if (els.pluginStoreReloadBtn) {
+		els.pluginStoreReloadBtn.addEventListener('click', function() {
+			startInteractiveLog('插件商店日志');
+			loadPluginStoreData().catch(function(err) {
+				showToast(text(err && err.message, '读取插件商店失败'), 'error');
+			}).finally(function() {
+				stopInteractiveLog();
+			});
+		});
+	}
+
+	if (els.pluginStoreSearch) {
+		els.pluginStoreSearch.addEventListener('input', function() {
+			state.pluginStoreKeyword = text(els.pluginStoreSearch.value, '').trim();
+			state.pluginStorePage = 0;
+			renderPluginPanel();
+		});
+	}
+
+	if (els.pluginStorePrevBtn) {
+		els.pluginStorePrevBtn.addEventListener('click', function() {
+			if (state.pluginStorePage <= 0)
+				return;
+			state.pluginStorePage--;
+			renderPluginPanel();
+		});
+	}
+
+	if (els.pluginStoreNextBtn) {
+		els.pluginStoreNextBtn.addEventListener('click', function() {
+			var pageCount = Math.max(1, Math.ceil(filterPluginStoreItems().length / 10));
+
+			if (state.pluginStorePage >= pageCount - 1)
+				return;
+			state.pluginStorePage++;
+			renderPluginPanel();
+		});
+	}
+
+	if (els.pluginReloadBtn) {
+		els.pluginReloadBtn.addEventListener('click', function() {
+			if (!state.connected) {
+				showToast('请先连接后台', 'error');
+				return;
+			}
+
+			startInteractiveLog('插件加载日志');
+			loadPluginHost(true).catch(function(err) {
+				showToast(text(err && err.message, '插件加载失败'), 'error');
+			}).finally(function() {
+				stopInteractiveLog();
+			});
+		});
+	}
 
 	els.bandSelectAll.addEventListener('change', function() {
 		toggleAllBandBoxes(els.bandSelectAll.checked);
@@ -2242,7 +2552,9 @@ function collectEls() {
 		'tokenField', 'token', 'tokenMode', 'password', 'loginMethod', 'connectBtn', 'refreshBtn', 'toast', 'needTokenTag',
 		'sumModel', 'sumNetwork', 'sumProvider', 'sumSpeed', 'sumTemp', 'sumCpu', 'sumMem', 'sumBattery', 'sumSignal', 'sumWifi', 'sumDaily', 'sumMonthly', 'sumAdb',
 		'statusText', 'statusHint',
-		'smsList', 'smsPhone', 'smsContent', 'smsSendBtn',
+		'smsThreadList', 'smsPhone', 'smsContent', 'smsSendBtn',
+		'pluginStoreStatus', 'pluginStoreReloadBtn', 'pluginStoreSearch', 'pluginStoreSummary', 'pluginStorePrevBtn', 'pluginStorePageText', 'pluginStoreNextBtn', 'pluginStoreList',
+		'pluginReloadBtn', 'pluginHostNote', 'pluginHostCount', 'pluginHostStatus', 'pluginHostList', 'pluginCompatStatus', 'pluginCompatBody', 'pluginCompatRoot', 'pluginCompatContainer', 'pluginCompatDialogBody', 'pluginCompatHidden', 'BG', 'BG_OVERLAY', 'MAIN_TITLE', 'MODEL', 'collapseBtn_menu', 'collapse_status_btn', 'collapse_status', 'collapse_smsforward_btn', 'collapse_smsforward', 'STATUS', 'SMS', 'AT', 'ADVANCE', 'PLUGIN_SETTING', 'USBStatusManagement', 'UNREAD_SMS', 'smsList', 'sms-list', 'PhoneInput', 'SMSInput', 'PluginModal', 'plugin_store', 'ATModal', 'AT_INPUT', 'advanceModal', 'smsForwardModal', 'toastContainer', 'custom_head', 'sortable-list', 'AT_RESULT', 'AD_RESULT',
 		'bandSelectAll', 'bandLockTable', 'bandApplyBtn', 'bandUnlockBtn', 'lockedCellTable', 'currentCellSummary', 'currentCellTable', 'cellRefreshBtn', 'neighborCellTable', 'cellRatSelect', 'lockCellPci', 'lockCellEarfcn', 'useCurrentCellBtn', 'cellLockBtn', 'cellUnlockBtn',
 		'apnMode', 'apnCurrent', 'apnProfileSelect', 'apnProfileName', 'apnName', 'apnUsername', 'apnPassword', 'apnAuth', 'apnPdp', 'apnModeSelect', 'apnLoadBtn', 'apnApplyBtn', 'apnSaveBtn', 'apnDeleteBtn',
 		'adbAlive', 'adbUsb', 'adbUsbBtn', 'adbWifiBtn', 'logPanelTitle', 'logList', 'rawLogList'
@@ -2290,6 +2602,1709 @@ function renderRawLogs() {
 			E('div', { 'class': 'ufi-log-meta' }, item.time + ' [' + item.status + '] ' + item.action),
 			E('div', { 'class': 'ufi-log-body' }, item.raw || '[EMPTY]')
 		]));
+	});
+}
+
+function createPluginEntryButton() {
+	return E('button', {
+		'class': 'ufi-function-btn',
+		'data-open-panel': 'plugin'
+	}, [
+		document.createTextNode('插件下载 '),
+		E('span', {}, '↗')
+	]);
+}
+
+function sanitizePluginName(name, fallback) {
+	var value = text(name, fallback || '未命名插件').replace(/-->/g, '').trim();
+	return value || text(fallback, '未命名插件');
+}
+
+function unwrapPluginContent(content) {
+	var raw = text(content, '').trim();
+	var match = raw.match(/^<!--\s*\[kano_disabled\]\s*[\r\n]*([\s\S]*?)[\r\n]*\[kano_disabled\]\s*-->\s*$/i);
+
+	if (match)
+		return {
+			content: text(match[1], '').trim(),
+			disabled: true
+		};
+
+	return {
+		content: raw,
+		disabled: false
+	};
+}
+
+function wrapPluginContent(content, disabled) {
+	var raw = text(content, '').trim();
+
+	if (!disabled)
+		return raw;
+
+	return '<!-- [kano_disabled]\n' + raw + '\n[kano_disabled] -->';
+}
+
+function parsePluginSource(rawText) {
+	var source = text(rawText, '');
+	var regex = /<!--\s*\[KANO_PLUGIN_START\]\s*(.*?)\s*-->([\s\S]*?)<!--\s*\[KANO_PLUGIN_END\]\s*\1\s*-->/g;
+	var plugins = [];
+	var extras = [];
+	var segments = [];
+	var match;
+	var lastIndex = 0;
+
+	while ((match = regex.exec(source)) !== null) {
+		var before = source.slice(lastIndex, match.index);
+		var meta = unwrapPluginContent(match[2]);
+
+		if (hasText(before)) {
+			extras.push(before.trim());
+			segments.push({
+				type: 'extra',
+				content: before.trim()
+			});
+		}
+
+		plugins.push({
+			name: sanitizePluginName(match[1], '未命名插件'),
+			content: meta.content,
+			disabled: meta.disabled
+		});
+		segments.push({
+			type: 'plugin',
+			name: sanitizePluginName(match[1], '未命名插件'),
+			content: meta.content,
+			disabled: meta.disabled
+		});
+
+		lastIndex = regex.lastIndex;
+	}
+
+	if (hasText(source.slice(lastIndex))) {
+		extras.push(source.slice(lastIndex).trim());
+		segments.push({
+			type: 'extra',
+			content: source.slice(lastIndex).trim()
+		});
+	}
+
+	return {
+		plugins: plugins,
+		extraText: extras.join('\n\n').trim(),
+		rawText: source,
+		segments: segments
+	};
+}
+
+function composePluginSource(list, extraText) {
+	var sections = (list || []).map(function(item) {
+		return '<!-- [KANO_PLUGIN_START] ' + sanitizePluginName(item && item.name, '未命名插件') + ' -->\n'
+			+ wrapPluginContent(text(item && item.content, ''), !!(item && item.disabled)) + '\n'
+			+ '<!-- [KANO_PLUGIN_END] ' + sanitizePluginName(item && item.name, '未命名插件') + ' -->';
+	});
+
+	if (hasText(extraText))
+		sections.push(String(extraText).trim());
+
+	return sections.join('\n\n\n\n').trim();
+}
+
+function syncPluginText() {
+	state.pluginText = composePluginSource(state.pluginList, state.pluginExtraText);
+	return state.pluginText;
+}
+
+function mergePluginTextIntoState(content, sourceName) {
+	var parsed = parsePluginSource(content);
+	var addedNames = [];
+	var replacedNames = [];
+
+	if (parsed.plugins.length) {
+		parsed.plugins.forEach(function(item) {
+			var index = state.pluginList.findIndex(function(existing) {
+				return sanitizePluginName(existing && existing.name, '') === sanitizePluginName(item && item.name, '');
+			});
+
+			if (index >= 0) {
+				state.pluginList[index] = item;
+				replacedNames.push(item.name);
+			}
+			else {
+				state.pluginList.push(item);
+				addedNames.push(item.name);
+			}
+		});
+	}
+	else if (hasText(content)) {
+		var pluginName = sanitizePluginName(sourceName, '新插件');
+		var replaceIndex = state.pluginList.findIndex(function(existing) {
+			return sanitizePluginName(existing && existing.name, '') === pluginName;
+		});
+
+		if (replaceIndex >= 0) {
+			state.pluginList[replaceIndex] = {
+				name: pluginName,
+				content: text(content, '').trim(),
+				disabled: false
+			};
+			replacedNames.push(pluginName);
+		}
+		else {
+			state.pluginList.push({
+				name: pluginName,
+				content: text(content, '').trim(),
+				disabled: false
+			});
+			addedNames.push(pluginName);
+		}
+	}
+
+	syncPluginText();
+	return {
+		addedNames: addedNames,
+		replacedNames: replacedNames,
+		parsed: parsed
+	};
+}
+
+function exportPluginText() {
+	var content = syncPluginText();
+	var blob;
+	var url;
+	var link;
+	var timeText;
+
+	if (!hasText(content)) {
+		showToast('当前没有可导出的插件内容', 'error');
+		return;
+	}
+
+	blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+	url = URL.createObjectURL(blob);
+	link = document.createElement('a');
+	timeText = new Date().toLocaleString('zh-CN').replace(/[\\/: ]/g, '_');
+	link.href = url;
+	link.download = 'UFI-TOOLS_Plugins_' + timeText + '.txt';
+	document.body.appendChild(link);
+	link.click();
+	link.remove();
+	URL.revokeObjectURL(url);
+}
+
+function loadPluginData() {
+	state.pluginLoading = true;
+	renderPluginPanel();
+	renderPluginHost();
+
+	return getCustomHead().then(function(rawText) {
+		var parsed = parsePluginSource(rawText);
+		state.pluginList = parsed.plugins;
+		state.pluginExtraText = parsed.extraText;
+		state.pluginText = rawText;
+		state.pluginHostSource = rawText;
+
+		pushLog('INFO', '插件内容已加载，共 ' + state.pluginList.length + ' 个插件');
+		return parsed;
+	}).finally(function() {
+		state.pluginLoading = false;
+		renderPluginPanel();
+		renderPluginHost();
+	});
+}
+
+function savePluginData() {
+	var content = syncPluginText();
+	var size = new TextEncoder().encode(content).length;
+
+	if (size > 1145 * 1024)
+		return Promise.reject(new Error('插件内容超出限制：' + Math.ceil(size / 1024) + 'KB / 1145KB'));
+
+	state.pluginSaving = true;
+	renderPluginPanel();
+
+	return setCustomHead(content).then(function(res) {
+		if (String(res && res.result) !== 'success')
+			throw new Error(text(res && (res.error || res.message), '插件保存失败'));
+
+		pushLog('INFO', '插件内容已保存');
+		showToast('插件保存成功', 'success');
+		return loadPluginData();
+	}).finally(function() {
+		state.pluginSaving = false;
+		renderPluginPanel();
+		renderPluginHost();
+	});
+}
+
+function loadPluginStoreData() {
+	state.pluginStoreLoading = true;
+	renderPluginPanel();
+
+	return getPluginStore().then(function(res) {
+		var data = res && res.res && res.res.data ? res.res.data : {};
+		state.pluginStoreItems = Array.isArray(data.content) ? data.content : [];
+		state.pluginStoreDownloadUrl = text(res && res.download_url, '');
+		state.pluginStorePage = 0;
+		pushLog('INFO', '插件商店已加载，共 ' + state.pluginStoreItems.length + ' 项');
+		return state.pluginStoreItems;
+	}).finally(function() {
+		state.pluginStoreLoading = false;
+		renderPluginPanel();
+	});
+}
+
+function filterPluginStoreItems() {
+	var keyword = text(state.pluginStoreKeyword, '').trim().toLowerCase();
+
+	if (!keyword)
+		return state.pluginStoreItems || [];
+
+	return (state.pluginStoreItems || []).filter(function(item) {
+		return text(item && item.name, '').toLowerCase().indexOf(keyword) >= 0;
+	});
+}
+
+function currentPluginStorePageItems() {
+	var items = filterPluginStoreItems();
+	var start = state.pluginStorePage * 10;
+	return items.slice(start, start + 10);
+}
+
+function getPluginStoreItemUrl(item) {
+	var base = text(state.pluginStoreDownloadUrl, '');
+	var name = text(item && item.name, '');
+	return base && name ? (base + '/' + name) : '';
+}
+
+function downloadPluginText(url, name) {
+	var fileName;
+	if (!hasText(url))
+		return Promise.reject(new Error('插件下载地址为空'));
+
+	return proxyText(url).then(function(content) {
+		var blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+		var link = document.createElement('a');
+		var objectUrl = URL.createObjectURL(blob);
+
+		fileName = sanitizePluginName(name, 'plugin');
+		if (!/\.txt$/i.test(fileName))
+			fileName += '.txt';
+		link.href = objectUrl;
+		link.download = fileName;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		URL.revokeObjectURL(objectUrl);
+	});
+}
+
+function installPluginFromStore(item) {
+	var name = text(item && item.name, '');
+	var url = getPluginStoreItemUrl(item);
+
+	if (!hasText(url))
+		return Promise.reject(new Error('插件商店下载地址为空'));
+
+	startInteractiveLog('插件商店安装日志');
+	pushRawLog('插件商店安装', 'URL', url);
+
+	return loadPluginData().then(function() {
+		return proxyText(url);
+	}).then(function(content) {
+		var merged = mergePluginTextIntoState(content, name);
+		var touched = merged.addedNames.concat(merged.replacedNames);
+
+		if (!touched.length)
+			throw new Error('未识别到可安装的插件内容');
+
+		return savePluginData().then(function() {
+			return loadPluginHost(true).then(function() {
+				showToast((merged.replacedNames.length ? '已更新插件：' : '已安装插件：') + touched.join('、'), 'success');
+			});
+		});
+	}).finally(function() {
+		stopInteractiveLog();
+	});
+}
+
+function normalizePluginAssetUrl(url) {
+	var raw = text(url, '').trim();
+
+	if (!raw || /^(?:[a-z]+:|\/\/|\/)/i.test(raw))
+		return raw;
+
+	return '/ufi-tools/' + raw.replace(/^\.?\//, '');
+}
+
+function getPluginSlotCount() {
+	return Object.keys(pluginHostSlots).length;
+}
+
+function updatePluginDataListeners() {
+	var snapshot = Object.assign({}, window.UFI_DATA || {});
+
+	pluginDataListeners.slice().forEach(function(listener) {
+		try {
+			listener(snapshot);
+		}
+		catch (err) {}
+	});
+}
+
+function syncPluginGlobals() {
+	var snapshot = Object.assign(
+		{},
+		state.versionInfo || {},
+		state.ufiData || {},
+		state.dataUsage || {},
+		state.connInfo || {},
+		{
+			adb_alive: state.adbAlive ? 'true' : 'false',
+			connected: !!state.connected,
+			app_release: APP_RELEASE
+		}
+	);
+	var target;
+
+	if (!window.UFI_DATA || typeof window.UFI_DATA !== 'object')
+		window.UFI_DATA = {};
+
+	target = window.UFI_DATA;
+	Object.keys(target).forEach(function(key) {
+		delete target[key];
+	});
+	Object.keys(snapshot).forEach(function(key) {
+		target[key] = snapshot[key];
+	});
+
+	syncPluginCompatGlobals();
+	updatePluginDataListeners();
+}
+
+function removeManagedPluginAssets() {
+	Array.prototype.forEach.call(document.querySelectorAll('[data-ufi-plugin-managed="1"]'), function(node) {
+		node.remove();
+	});
+}
+
+function clearPluginHostDom() {
+	if (els.pluginHostList)
+		els.pluginHostList.innerHTML = '';
+
+	pluginHostSlots = {};
+	state.pluginHostMountedCount = 0;
+}
+
+function updatePluginMountedCount() {
+	state.pluginHostMountedCount = Object.keys(pluginHostSlots).filter(function(key) {
+		return pluginHostSlots[key] && pluginHostSlots[key].registered;
+	}).length;
+}
+
+function resetPluginCompatDom() {
+	if (els.pluginCompatBody)
+		els.pluginCompatBody.innerHTML = '';
+
+	if (els.pluginCompatDialogBody)
+		els.pluginCompatDialogBody.innerHTML = '';
+
+	if (els['sms-list'])
+		els['sms-list'].innerHTML = '';
+
+	if (els.smsList)
+		els.smsList.style.display = 'none';
+
+	if (els.PhoneInput)
+		els.PhoneInput.value = '';
+
+	if (els.SMSInput)
+		els.SMSInput.value = '';
+
+	if (els.collapse_status)
+		els.collapse_status.setAttribute('data-name', 'open');
+
+	if (els.collapse_smsforward)
+		els.collapse_smsforward.setAttribute('data-name', 'close');
+
+	if (els.STATUS) {
+		els.STATUS.innerHTML = '';
+		els.STATUS.appendChild(E('li', { 'class': 'ufi-plugin-compat-empty' }, '旧插件兼容页面已就绪，等待插件接管'));
+	}
+
+	if (els.toastContainer)
+		els.toastContainer.innerHTML = '';
+
+	if (els.AT_RESULT)
+		els.AT_RESULT.textContent = '';
+
+	if (els.AD_RESULT)
+		els.AD_RESULT.textContent = '';
+
+	['PluginModal', 'plugin_store', 'ATModal', 'advanceModal', 'smsForwardModal'].forEach(function(id) {
+		var modal = els[id];
+
+		if (!modal)
+			return;
+
+		modal.style.display = 'none';
+		modal.style.opacity = '0';
+	});
+
+	if (els.pluginCompatStatus)
+		els.pluginCompatStatus.textContent = '兼容宿主已就绪';
+}
+
+function getPluginCompatSnapshot() {
+	return JSON.stringify({
+		container: els.pluginCompatContainer ? els.pluginCompatContainer.innerHTML : '',
+		dialogBody: els.pluginCompatDialogBody ? els.pluginCompatDialogBody.innerHTML : '',
+		menuCollapse: els.collapse_status ? (els.collapse_status.innerHTML + '|' + els.collapse_status.getAttribute('data-name')) : '',
+		smsModal: els.smsList ? (els.smsList.innerHTML + '|' + els.smsList.style.display) : '',
+		smsForwardCollapse: els.collapse_smsforward ? (els.collapse_smsforward.innerHTML + '|' + els.collapse_smsforward.getAttribute('data-name')) : '',
+		status: els.STATUS ? els.STATUS.innerHTML : '',
+		body: els.pluginCompatBody ? els.pluginCompatBody.innerHTML : '',
+		pluginButton: els.PLUGIN_SETTING ? els.PLUGIN_SETTING.outerHTML : '',
+		smsButton: els.SMS ? els.SMS.outerHTML : '',
+		atButton: els.AT ? els.AT.outerHTML : '',
+		advanceButton: els.ADVANCE ? els.ADVANCE.outerHTML : '',
+		pluginModal: els.PluginModal ? (els.PluginModal.innerHTML + '|' + els.PluginModal.style.display + '|' + els.PluginModal.style.opacity) : '',
+		storeModal: els.plugin_store ? (els.plugin_store.innerHTML + '|' + els.plugin_store.style.display + '|' + els.plugin_store.style.opacity) : '',
+		atModal: els.ATModal ? (els.ATModal.innerHTML + '|' + els.ATModal.style.display + '|' + els.ATModal.style.opacity) : '',
+		advanceModal: els.advanceModal ? (els.advanceModal.innerHTML + '|' + els.advanceModal.style.display + '|' + els.advanceModal.style.opacity) : '',
+		smsForwardModal: els.smsForwardModal ? (els.smsForwardModal.innerHTML + '|' + els.smsForwardModal.style.display + '|' + els.smsForwardModal.style.opacity) : '',
+		atResult: els.AT_RESULT ? els.AT_RESULT.textContent : '',
+		adResult: els.AD_RESULT ? els.AD_RESULT.textContent : ''
+	});
+}
+
+function pluginCompatSnapshotChanged(beforeSnapshot) {
+	return beforeSnapshot !== getPluginCompatSnapshot();
+}
+
+function pluginCompatShowModal(selector, time, opacity) {
+	var el = document.querySelector(selector);
+
+	if (!el)
+		return;
+
+	el.style.opacity = '0';
+	el.style.display = '';
+	window.setTimeout(function() {
+		el.style.opacity = text(opacity, '1');
+	}, Number(time) > 10 ? 10 : 0);
+}
+
+function pluginCompatCloseModal(selector, time, callback) {
+	var el = document.querySelector(selector);
+
+	if (!el)
+		return;
+
+	el.style.opacity = '0';
+	window.setTimeout(function() {
+		el.style.display = 'none';
+		if (typeof callback === 'function')
+			callback();
+	}, Number(time) || 300);
+}
+
+function pluginCompatDebounce(fn, delay) {
+	var timer = null;
+
+	return function() {
+		var args = arguments;
+		var self = this;
+
+		if (timer)
+			window.clearTimeout(timer);
+
+		timer = window.setTimeout(function() {
+			fn.apply(self, args);
+		}, Number(delay) || 0);
+	};
+}
+
+function normalizePluginRuntimeErrorMessage(reason) {
+	var message = text(reason && reason.message, '');
+	var raw = message || text(reason, '');
+	var match;
+	var domNames = {
+		collapseBtn_menu: '#collapseBtn_menu',
+		collapse_status_btn: '#collapse_status_btn',
+		collapse_status: '#collapse_status',
+		collapse_smsforward_btn: '#collapse_smsforward_btn',
+		collapse_smsforward: '#collapse_smsforward',
+		smsList: '#smsList',
+		PhoneInput: '#PhoneInput',
+		SMSInput: '#SMSInput',
+		STATUS: '#STATUS',
+		SMS: '#SMS',
+		AT: '#AT',
+		ADVANCE: '#ADVANCE',
+		PLUGIN_SETTING: '#PLUGIN_SETTING',
+		ATModal: '#ATModal',
+		advanceModal: '#advanceModal',
+		smsForwardModal: '#smsForwardModal',
+		AT_RESULT: '#AT_RESULT',
+		AD_RESULT: '#AD_RESULT',
+		USBStatusManagement: '#USBStatusManagement',
+		UNREAD_SMS: '#UNREAD_SMS'
+	};
+
+	if (!raw)
+		return '';
+
+	match = raw.match(/^([A-Za-z_$][A-Za-z0-9_$]*) is not defined$/);
+	if (match)
+		return domNames[match[1]] ? ('缺少页面节点：' + domNames[match[1]]) : ('缺少 helper：' + match[1]);
+
+	if (/Cannot read properties of null|Cannot set properties of null|Cannot read properties of undefined|Cannot set properties of undefined/.test(raw))
+		return '缺少页面节点或上下文：' + raw;
+
+	if (/Failed to fetch|请求失败|HTTP \d+|响应解析失败|请求超时/.test(raw))
+		return '接口失败：' + raw;
+
+	if (/脚本加载失败|资源加载失败/.test(raw))
+		return raw;
+
+	return '执行报错：' + raw;
+}
+
+function capturePluginRuntimeDiagnostics(run) {
+	var errors = [];
+
+	function push(reason) {
+		var message = normalizePluginRuntimeErrorMessage(reason);
+
+		if (!message || errors.indexOf(message) >= 0)
+			return;
+
+		errors.push(message);
+	}
+
+	function handleError(event) {
+		if (event && event.error)
+			push(event.error);
+		else if (event && event.message)
+			push(event.message);
+		else if (event && event.target && event.target !== window)
+			push('资源加载失败：' + text(event.target.src || event.target.href || event.target.tagName, '未知资源'));
+	}
+
+	function handleRejection(event) {
+		push(event && event.reason);
+	}
+
+	window.addEventListener('error', handleError, true);
+	window.addEventListener('unhandledrejection', handleRejection);
+
+	return Promise.resolve().then(run).then(function(result) {
+		return new Promise(function(resolve) {
+			window.setTimeout(function() {
+				resolve({
+					result: result,
+					errors: errors.slice()
+				});
+			}, 80);
+		});
+	}).catch(function(err) {
+		push(err);
+		err.__pluginRuntimeErrors = errors.slice();
+		throw err;
+	}).finally(function() {
+		window.removeEventListener('error', handleError, true);
+		window.removeEventListener('unhandledrejection', handleRejection);
+	});
+}
+
+function shouldCapturePluginBodyNode(node) {
+	if (!node || node.nodeType !== 1)
+		return false;
+
+	if (node === rootEl || node === document.body || node === document.documentElement)
+		return false;
+
+	if (/^(SCRIPT|STYLE|LINK|META)$/i.test(String(node.tagName || '')))
+		return false;
+
+	if (node.closest && node.closest('.ufi-redraw-root'))
+		return false;
+
+	return true;
+}
+
+function shouldCapturePluginModalNode(node) {
+	var tagName;
+	var className;
+	var id;
+
+	if (!node || node.nodeType !== 1)
+		return false;
+
+	tagName = String(node.tagName || '').toUpperCase();
+	className = String(node.className || '');
+	id = String(node.id || '');
+
+	if (tagName === 'DIALOG')
+		return true;
+
+	if (/\bmask\b/.test(className) || /\bmodal\b/.test(className))
+		return true;
+
+	if (/Modal$/i.test(id))
+		return true;
+
+	return false;
+}
+
+function appendPluginCompatNode(node) {
+	var modalBody = els.pluginCompatDialogBody;
+	var compatBody = els.pluginCompatBody;
+
+	if (!node)
+		return node;
+
+	if (shouldCapturePluginModalNode(node) && modalBody)
+		return modalBody.appendChild(node);
+
+	if (compatBody)
+		return compatBody.appendChild(node);
+
+	return node;
+}
+
+function withPluginCompatBodyBridge(run) {
+	var body = document.body;
+	var originalAppendChild;
+	var originalInsertBefore;
+
+	if (!body || (!els.pluginCompatBody && !els.pluginCompatDialogBody))
+		return Promise.resolve().then(run);
+
+	originalAppendChild = body.appendChild;
+	originalInsertBefore = body.insertBefore;
+
+	body.appendChild = function(node) {
+		if (shouldCapturePluginBodyNode(node))
+			return appendPluginCompatNode(node);
+		return originalAppendChild.call(body, node);
+	};
+	body.insertBefore = function(node, refNode) {
+		if (shouldCapturePluginBodyNode(node))
+			return appendPluginCompatNode(node);
+		return originalInsertBefore.call(body, node, refNode);
+	};
+
+	return Promise.resolve().then(run).finally(function() {
+		body.appendChild = originalAppendChild;
+		body.insertBefore = originalInsertBefore;
+	});
+}
+
+function runPluginWithCompatibilityTracking(name, run) {
+	var beforeSnapshot = getPluginCompatSnapshot();
+	var compatChanged = false;
+	var observer = null;
+	var observedRoots = [els.pluginCompatRoot, els.STATUS, els.pluginCompatBody, els.pluginCompatDialogBody, els.PluginModal, els.plugin_store, els.ATModal, els.advanceModal, els.smsForwardModal].filter(Boolean);
+
+	if (window.MutationObserver && observedRoots.length) {
+		observer = new MutationObserver(function(records) {
+			if (records && records.length)
+				compatChanged = true;
+		});
+		observedRoots.forEach(function(target) {
+			observer.observe(target, {
+				childList: true,
+				subtree: true,
+				attributes: true,
+				characterData: true
+			});
+		});
+	}
+
+	return capturePluginRuntimeDiagnostics(function() {
+		return withPluginCompatBodyBridge(run);
+	}).then(function(meta) {
+		return new Promise(function(resolve) {
+			window.setTimeout(function() {
+				resolve({
+					result: meta.result,
+					runtimeErrors: meta.errors || [],
+					compatChanged: compatChanged || pluginCompatSnapshotChanged(beforeSnapshot)
+				});
+			}, 48);
+		});
+	}).finally(function() {
+		if (observer)
+			observer.disconnect();
+	});
+}
+
+function normalizePluginCompatRemotePath(path) {
+	var value = text(path, '').trim();
+	var purePath;
+	var queryIndex;
+
+	if (!value)
+		return '';
+
+	queryIndex = value.indexOf('?');
+	purePath = queryIndex >= 0 ? value.slice(0, queryIndex) : value;
+
+	if (purePath.indexOf('/goform/') === 0)
+		return value;
+
+	if (purePath.indexOf('/api/') === 0)
+		return purePath.slice(4) + (queryIndex >= 0 ? value.slice(queryIndex) : '');
+
+	if (purePath.charAt(0) === '/')
+		return value;
+
+	return '/' + value;
+}
+
+function normalizePluginCompatSignPath(remotePath) {
+	var value = normalizePluginCompatRemotePath(remotePath);
+	var purePath = value.split('?')[0];
+
+	if (!purePath)
+		return '/api';
+
+	if (purePath.indexOf('/goform/') === 0)
+		return purePath;
+
+	return '/api' + purePath;
+}
+
+function translatePluginCompatFetchInput(input) {
+	var raw = '';
+	var url;
+	var remotePath = '';
+
+	if (typeof input === 'string')
+		raw = input;
+	else if (input && typeof input.url === 'string')
+		raw = input.url;
+
+	if (!raw)
+		return {
+			input: input,
+			remotePath: ''
+		};
+
+	try {
+		url = new URL(raw, window.location.origin);
+	}
+	catch (err) {
+		return {
+			input: input,
+			remotePath: ''
+		};
+	}
+
+	if (url.pathname === PROXY_BASE && url.searchParams.has('ufi_path')) {
+		remotePath = normalizePluginCompatRemotePath(url.searchParams.get('ufi_path'));
+		return {
+			input: url.toString(),
+			remotePath: remotePath
+		};
+	}
+
+	if (url.pathname.indexOf('/api/') === 0 || url.pathname.indexOf('/goform/') === 0) {
+		remotePath = normalizePluginCompatRemotePath(url.pathname + url.search);
+		return {
+			input: PROXY_BASE + '?ufi_path=' + encodeURIComponent(remotePath),
+			remotePath: remotePath
+		};
+	}
+
+	return {
+		input: input,
+		remotePath: ''
+	};
+}
+
+function ensurePluginCompatFetchBridge() {
+	window.originFetch = NATIVE_FETCH;
+	window.__UFI_PLUGIN_NATIVE_FETCH__ = NATIVE_FETCH;
+	return pluginCompatFetch;
+}
+
+function syncPluginCompatGlobals() {
+	var compatGlobals = [
+		'pluginCompatContainer',
+		'BG',
+		'BG_OVERLAY',
+		'MAIN_TITLE',
+		'MODEL',
+		'collapseBtn_menu',
+		'collapse_status_btn',
+		'collapse_status',
+		'collapse_smsforward_btn',
+		'collapse_smsforward',
+		'PLUGIN_SETTING',
+		'SMS',
+		'AT',
+		'ADVANCE',
+		'USBStatusManagement',
+		'UNREAD_SMS',
+		'STATUS',
+		'smsList',
+		'PhoneInput',
+		'SMSInput',
+		'ATModal',
+		'AT_INPUT',
+		'AT_RESULT',
+		'advanceModal',
+		'AD_RESULT',
+		'smsForwardModal',
+		'custom_head',
+		'sortable-list',
+		'plugin_store',
+		'PluginModal'
+	];
+
+	window.KANO_baseURL = '/api';
+	window.KANO_PASSWORD = state.backendPassword || null;
+	window.KANO_TOKEN = state.tokenHash || '';
+	window.KANO_COOKIE = state.cookie || '';
+	window.ACCEPT_TERMS = false;
+	window.common_headers = buildPluginCompatCommonHeaders();
+	window.originFetch = NATIVE_FETCH;
+	window.pluginFetch = pluginCompatFetch;
+	window.__UFI_PLUGIN_FETCH__ = pluginCompatFetch;
+	window.fetchWithTimeout = pluginCompatFetchWithTimeout;
+
+	compatGlobals.forEach(function(key) {
+		window[key] = els[key] || null;
+	});
+}
+
+function resetPluginHostRuntime() {
+	Object.keys(pluginHostCleanups).forEach(function(name) {
+		try {
+			if (typeof pluginHostCleanups[name] === 'function')
+				pluginHostCleanups[name]();
+		}
+		catch (err) {}
+	});
+
+	pluginHostCleanups = {};
+	pluginDataListeners = [];
+	removeManagedPluginAssets();
+	clearPluginHostDom();
+	resetPluginCompatDom();
+
+	if (window.KANO_PLUGIN_HOST && window.KANO_PLUGIN_HOST.__ufiBridge) {
+		window.KANO_PLUGIN_HOST.root = null;
+		window.KANO_PLUGIN_HOST.current = null;
+	}
+}
+
+function ensurePluginHostSlot(name, options) {
+	var pluginName = sanitizePluginName(name, '未命名插件');
+	var slot = pluginHostSlots[pluginName];
+	var body;
+	var status;
+	var mount;
+	var card;
+
+	if (slot)
+		return slot;
+
+	if (!els.pluginHostList)
+		return null;
+
+	if (els.pluginHostList.querySelector('.ufi-empty'))
+		els.pluginHostList.innerHTML = '';
+	body = E('div', { 'class': 'ufi-plugin-slot-body' });
+	status = E('span', { 'class': 'ufi-plugin-slot-status' }, text(options && options.status, '等待加载'));
+	mount = E('div', {
+		'class': 'ufi-plugin-slot-mount',
+		'data-plugin-name': pluginName
+	});
+	card = E('article', { 'class': 'ufi-plugin-slot' + ((options && options.disabled) ? ' is-disabled' : '') }, [
+		E('div', { 'class': 'ufi-plugin-slot-head' }, [
+			E('strong', {}, pluginName),
+			status
+		]),
+		body,
+		mount
+	]);
+	els.pluginHostList.appendChild(card);
+
+	slot = {
+		name: pluginName,
+		card: card,
+		body: body,
+		status: status,
+		mount: mount,
+		registered: false
+	};
+	pluginHostSlots[pluginName] = slot;
+	return slot;
+}
+
+function setPluginHostSlotBody(name, message, kind) {
+	var slot = ensurePluginHostSlot(name);
+
+	if (!slot)
+		return;
+
+	slot.body.innerHTML = '';
+	slot.body.appendChild(E('div', { 'class': 'ufi-note' + (kind ? ' is-' + kind : '') }, text(message, '-')));
+}
+
+function setPluginHostSlotStatus(name, message, kind) {
+	var slot = ensurePluginHostSlot(name);
+
+	if (!slot)
+		return;
+
+	slot.status.textContent = text(message, '-');
+	slot.card.classList.remove('is-ready', 'is-error', 'is-loading', 'is-disabled');
+	if (kind)
+		slot.card.classList.add('is-' + kind);
+}
+
+function createPluginHostApi(name) {
+	var slot = ensurePluginHostSlot(name);
+
+	return {
+		name: sanitizePluginName(name, '未命名插件'),
+		root: slot ? slot.mount : null,
+		compatRoot: els.pluginCompatBody || null,
+		compatStatusRoot: els.STATUS || null,
+		showToast: showToast,
+		showModal: pluginCompatShowModal,
+		closeModal: pluginCompatCloseModal,
+		debounce: pluginCompatDebounce,
+		fetchWithTimeout: pluginCompatFetchWithTimeout,
+		requestJson: requestJson,
+		getData: getData,
+		postData: postData,
+		adbKeepAlive: adbKeepAliveForPlugin,
+		runShellWithRoot: runShellWithRootForPlugin,
+		runShellWithUser: runShellWithUserForPlugin,
+		checkAdvancedFunc: checkAdvancedFuncForPlugin,
+		requestInterval: requestIntervalForPlugin,
+		getCustomHead: getCustomHead,
+		setCustomHead: setCustomHead,
+		readData: function() {
+			return Object.assign({}, window.UFI_DATA || {});
+		},
+		clear: function() {
+			if (slot)
+				slot.mount.innerHTML = '';
+		},
+		setStatus: function(message, kind) {
+			setPluginHostSlotStatus(name, message, kind || 'ready');
+		},
+		createSection: function(title) {
+			var box = E('section', { 'class': 'ufi-plugin-section' }, [
+				E('div', { 'class': 'ufi-plugin-section-title' }, text(title, '插件区块')),
+				E('div', { 'class': 'ufi-plugin-section-body' })
+			]);
+
+			if (slot)
+				slot.mount.appendChild(box);
+			return box.lastChild;
+		},
+		onDataChange: function(listener) {
+			if (typeof listener !== 'function')
+				return function() {};
+
+			pluginDataListeners.push(listener);
+			return function() {
+				pluginDataListeners = pluginDataListeners.filter(function(item) {
+					return item !== listener;
+				});
+			};
+		}
+	};
+}
+
+function registerPluginComponent(config) {
+	var current = window.__UFI_ACTIVE_PLUGIN__ || {};
+	var pluginName = sanitizePluginName(
+		config && typeof config === 'object' ? (config.name || config.title) : '',
+		current.name || '未命名插件'
+	);
+	var slot = ensurePluginHostSlot(pluginName);
+	var api = createPluginHostApi(pluginName);
+	var cleanup = null;
+	var shouldClear = !(config && typeof config === 'object' && config.append);
+
+	if (!slot)
+		return api;
+
+	try {
+		if (shouldClear)
+			slot.mount.innerHTML = '';
+
+		if (pluginHostCleanups[pluginName]) {
+			try {
+				pluginHostCleanups[pluginName]();
+			}
+			catch (err) {}
+			delete pluginHostCleanups[pluginName];
+		}
+
+		if (typeof config === 'function')
+			cleanup = config(slot.mount, api);
+		else if (config && typeof config.mount === 'function')
+			cleanup = config.mount(slot.mount, api);
+		else if (config && typeof config.render === 'function')
+			cleanup = config.render(slot.mount, api);
+		else if (config && typeof config.setup === 'function')
+			cleanup = config.setup(slot.mount, api);
+		else if (config && typeof config.init === 'function')
+			cleanup = config.init(slot.mount, api);
+		else if (config && config.element && typeof config.element === 'object' && typeof config.element.nodeType === 'number')
+			slot.mount.appendChild(config.element);
+		else if (config && config.node && typeof config.node === 'object' && typeof config.node.nodeType === 'number')
+			slot.mount.appendChild(config.node);
+		else if (config && hasText(config.html))
+			slot.mount.innerHTML = String(config.html);
+
+		if (typeof cleanup === 'function')
+			pluginHostCleanups[pluginName] = cleanup;
+
+		slot.registered = true;
+		updatePluginMountedCount();
+		setPluginHostSlotStatus(pluginName, text(config && config.status, slot.mount.childNodes.length ? '组件已挂载' : '插件已注册'), 'ready');
+		if (hasText(config && config.description))
+			setPluginHostSlotBody(pluginName, config.description);
+		renderPluginHost();
+		return api;
+	}
+	catch (err) {
+		setPluginHostSlotStatus(pluginName, '组件挂载失败', 'error');
+		setPluginHostSlotBody(pluginName, text(err && err.message, '插件执行失败'), 'error');
+		renderPluginHost();
+		throw err;
+	}
+}
+
+function ensurePluginHostBridge() {
+	var host;
+
+	if (window.KANO_PLUGIN_HOST && window.KANO_PLUGIN_HOST.__ufiBridge)
+		return window.KANO_PLUGIN_HOST;
+
+	host = {
+		__ufiBridge: true,
+		root: null,
+		current: null,
+		register: registerPluginComponent,
+		getRoot: function(name) {
+			var slot = ensurePluginHostSlot(name || (window.__UFI_ACTIVE_PLUGIN__ && window.__UFI_ACTIVE_PLUGIN__.name));
+			return slot ? slot.mount : null;
+		},
+		getApi: function(name) {
+			return createPluginHostApi(name || (window.__UFI_ACTIVE_PLUGIN__ && window.__UFI_ACTIVE_PLUGIN__.name));
+		},
+		showToast: showToast,
+		showModal: pluginCompatShowModal,
+		closeModal: pluginCompatCloseModal,
+		debounce: pluginCompatDebounce,
+		fetch: pluginCompatFetch,
+		fetchWithTimeout: pluginCompatFetchWithTimeout,
+		requestJson: requestJson,
+		getData: getData,
+		postData: postData,
+		adbKeepAlive: adbKeepAliveForPlugin,
+		runShellWithRoot: runShellWithRootForPlugin,
+		runShellWithUser: runShellWithUserForPlugin,
+		checkAdvancedFunc: checkAdvancedFuncForPlugin,
+		requestInterval: requestIntervalForPlugin,
+		getCustomHead: getCustomHead,
+		setCustomHead: setCustomHead,
+		readData: function() {
+			return Object.assign({}, window.UFI_DATA || {});
+		},
+		onDataChange: function(listener) {
+			return createPluginHostApi('插件宿主').onDataChange(listener);
+		}
+	};
+
+	window.KANO_PLUGIN_HOST = host;
+	syncPluginCompatGlobals();
+	window.requestJson = requestJson;
+	window.getData = getData;
+	window.postData = postData;
+	window.showToast = showToast;
+	window.showModal = pluginCompatShowModal;
+	window.closeModal = pluginCompatCloseModal;
+	window.debounce = pluginCompatDebounce;
+	window.pluginFetch = pluginCompatFetch;
+	window.adbKeepAlive = adbKeepAliveForPlugin;
+	window.runShellWithRoot = runShellWithRootForPlugin;
+	window.runShellWithUser = runShellWithUserForPlugin;
+	window.checkAdvancedFunc = checkAdvancedFuncForPlugin;
+	window.requestInterval = requestIntervalForPlugin;
+	window.createToast = function(message, color, delay, callback) {
+		var kind = color === 'red' ? 'error' : (color === 'green' ? 'success' : 'info');
+
+		showToast(text(message, ''), kind);
+		if (typeof callback === 'function')
+			window.setTimeout(callback, Number(delay) || 2600);
+	};
+	if (typeof window.t !== 'function') {
+		window.t = function(key) {
+			return text(key, '');
+		};
+	}
+	if (!window.UFI_DATA || typeof window.UFI_DATA !== 'object')
+		window.UFI_DATA = {};
+
+	return host;
+}
+
+function executeManagedPluginScript(name, scriptEl) {
+	return new Promise(function(resolve, reject) {
+		var prelude = ''
+			+ 'var BG = window.BG;'
+			+ 'var BG_OVERLAY = window.BG_OVERLAY;'
+			+ 'var MAIN_TITLE = window.MAIN_TITLE;'
+			+ 'var MODEL = window.MODEL;'
+			+ 'var collapseBtn_menu = window.collapseBtn_menu;'
+			+ 'var collapse_status_btn = window.collapse_status_btn;'
+			+ 'var collapse_status = window.collapse_status;'
+			+ 'var collapse_smsforward_btn = window.collapse_smsforward_btn;'
+			+ 'var collapse_smsforward = window.collapse_smsforward;'
+			+ 'var PLUGIN_SETTING = window.PLUGIN_SETTING;'
+			+ 'var SMS = window.SMS;'
+			+ 'var AT = window.AT;'
+			+ 'var ADVANCE = window.ADVANCE;'
+			+ 'var USBStatusManagement = window.USBStatusManagement;'
+			+ 'var UNREAD_SMS = window.UNREAD_SMS;'
+			+ 'var STATUS = window.STATUS;'
+			+ 'var smsList = window.smsList;'
+			+ 'var PhoneInput = window.PhoneInput;'
+			+ 'var SMSInput = window.SMSInput;'
+			+ 'var ATModal = window.ATModal;'
+			+ 'var AT_INPUT = window.AT_INPUT;'
+			+ 'var AT_RESULT = window.AT_RESULT;'
+			+ 'var advanceModal = window.advanceModal;'
+			+ 'var AD_RESULT = window.AD_RESULT;'
+			+ 'var smsForwardModal = window.smsForwardModal;'
+			+ 'var plugin_store = window.plugin_store;'
+			+ 'var PluginModal = window.PluginModal;'
+			+ '\n';
+		var node = document.createElement('script');
+		var src = text(scriptEl.getAttribute('src'), '').trim();
+		var host = ensurePluginHostBridge();
+		var finish = function(fn) {
+			window.__UFI_ACTIVE_PLUGIN__ = null;
+			host.root = null;
+			host.current = null;
+			fn();
+		};
+
+		node.dataset.ufiPluginManaged = '1';
+		node.dataset.ufiPluginName = sanitizePluginName(name, '插件');
+
+		if (scriptEl.type)
+			node.type = scriptEl.type;
+
+		window.__UFI_ACTIVE_PLUGIN__ = {
+			name: sanitizePluginName(name, '插件')
+		};
+		host.root = host.getRoot(name);
+		host.current = window.__UFI_ACTIVE_PLUGIN__;
+
+		if (src) {
+			node.src = normalizePluginAssetUrl(src);
+			node.async = false;
+			node.onload = function() {
+				finish(resolve);
+			};
+			node.onerror = function() {
+				finish(function() {
+					reject(new Error('脚本加载失败：' + node.src));
+				});
+			};
+			document.head.appendChild(node);
+			return;
+		}
+
+		node.textContent = prelude + text(scriptEl.textContent, '');
+		try {
+			document.head.appendChild(node);
+			window.setTimeout(function() {
+				finish(resolve);
+			}, 0);
+		}
+		catch (err) {
+			finish(function() {
+				reject(err);
+			});
+		}
+	});
+}
+
+function applyManagedPluginNode(name, node) {
+	var tag = String(node.tagName || '').toLowerCase();
+	var clone;
+
+	if (tag === 'script')
+		return executeManagedPluginScript(name, node);
+
+	clone = node.cloneNode(true);
+	clone.dataset.ufiPluginManaged = '1';
+	clone.dataset.ufiPluginName = sanitizePluginName(name, '插件');
+
+	if (tag === 'link' && clone.getAttribute('href'))
+		clone.setAttribute('href', normalizePluginAssetUrl(clone.getAttribute('href')));
+
+	document.head.appendChild(clone);
+	return Promise.resolve();
+}
+
+function executePluginPayload(name, content, options) {
+	var parser = new DOMParser();
+	var doc = parser.parseFromString(text(content, ''), 'text/html');
+	var nodes = Array.prototype.slice.call(doc.querySelectorAll('style, link, meta, script'));
+	var chain = Promise.resolve();
+	var slot = options && !options.globalOnly ? ensurePluginHostSlot(name, options) : null;
+
+	if (slot && !slot.registered) {
+		setPluginHostSlotStatus(name, '组件加载中', 'loading');
+		setPluginHostSlotBody(name, '插件已加载，正在等待组件挂载');
+	}
+
+	if (!nodes.length && slot && hasText(content)) {
+		slot.mount.innerHTML = text(content, '');
+		slot.registered = true;
+		updatePluginMountedCount();
+		setPluginHostSlotStatus(name, '已挂载静态内容', 'ready');
+		setPluginHostSlotBody(name, '插件未注册脚本组件，已直接渲染原始内容');
+		return Promise.resolve();
+	}
+
+	nodes.forEach(function(node) {
+		chain = chain.then(function() {
+			return applyManagedPluginNode(name, node);
+		});
+	});
+
+	if (!slot)
+		return chain;
+
+	return runPluginWithCompatibilityTracking(name, function() {
+		return chain;
+	}).then(function(meta) {
+		if (slot.registered) {
+			if (meta.runtimeErrors && meta.runtimeErrors.length)
+				setPluginHostSlotBody(name, meta.runtimeErrors.join('；'), 'error');
+			return meta.result;
+		}
+
+		if (meta.runtimeErrors && meta.runtimeErrors.length) {
+			setPluginHostSlotStatus(name, meta.compatChanged ? '兼容内容异常' : '执行报错', 'error');
+			setPluginHostSlotBody(name, meta.runtimeErrors.join('；'), 'error');
+		}
+		else if (meta.compatChanged) {
+			slot.registered = true;
+			updatePluginMountedCount();
+			setPluginHostSlotStatus(name, '已挂载兼容内容', 'ready');
+			setPluginHostSlotBody(name, '插件未显式注册组件，已按旧版兼容模式接管下方兼容页面');
+		}
+		else {
+			setPluginHostSlotStatus(name, '等待交互', 'loading');
+			setPluginHostSlotBody(name, '插件脚本已执行，但当前尚未生成可见组件。若插件绑定了旧页面按钮，请在兼容页面区域继续操作');
+		}
+
+		if (els.pluginCompatStatus)
+			els.pluginCompatStatus.textContent = '兼容脚本已加载：' + sanitizePluginName(name, '插件');
+
+		return meta.result;
+	});
+}
+
+function applyPluginSegments(parsed) {
+	var segments = parsed && Array.isArray(parsed.segments) ? parsed.segments : [];
+	var chain = Promise.resolve();
+	var failed = [];
+
+	segments.forEach(function(segment, index) {
+		chain = chain.then(function() {
+			if (!segment || !hasText(segment.content))
+				return null;
+
+			if (segment.type === 'plugin') {
+				if (segment.disabled) {
+					ensurePluginHostSlot(segment.name, { disabled: true, status: '已停用' });
+					setPluginHostSlotBody(segment.name, '插件已停用，当前不会加载组件');
+					setPluginHostSlotStatus(segment.name, '已停用', 'disabled');
+					return null;
+				}
+
+				return executePluginPayload(segment.name, segment.content, {
+					status: '组件加载中'
+				});
+			}
+
+			return executePluginPayload('附加扩展-' + (index + 1), segment.content, {
+				globalOnly: true
+			});
+		}).catch(function(err) {
+			failed.push({
+				name: segment && segment.type === 'plugin' ? sanitizePluginName(segment.name, '未命名插件') : ('附加扩展-' + (index + 1)),
+				message: text(err && err.message, '插件加载失败')
+			});
+
+			if (segment && segment.type === 'plugin') {
+				ensurePluginHostSlot(segment.name);
+				setPluginHostSlotStatus(segment.name, '加载失败', 'error');
+				setPluginHostSlotBody(segment.name, text(err && err.message, '插件加载失败'), 'error');
+			}
+			return null;
+		});
+	});
+
+	return chain.then(function() {
+		return failed;
+	});
+}
+
+function loadPluginHost(force) {
+	if (state.pluginHostLoading && !force)
+		return Promise.resolve();
+
+	ensurePluginHostBridge();
+	state.pluginHostLoading = true;
+	state.pluginHostReady = false;
+	state.pluginHostError = '';
+	renderPluginHost();
+	renderPluginPanel();
+
+	return loadPluginData().then(function(parsed) {
+		resetPluginHostRuntime();
+		ensurePluginHostBridge();
+		syncPluginCompatGlobals();
+		syncPluginGlobals();
+		return applyPluginSegments(parsed).then(function(failed) {
+			state.pluginHostReady = true;
+			state.pluginHostError = failed.length ? ('部分插件加载失败：' + failed.map(function(item) { return item.name; }).join('、')) : '';
+			renderPluginHost();
+			renderPluginPanel();
+			return parsed;
+		});
+	}).catch(function(err) {
+		state.pluginHostReady = false;
+		state.pluginHostError = text(err && err.message, '插件加载失败');
+		renderPluginHost();
+		renderPluginPanel();
+		throw err;
+	}).finally(function() {
+		state.pluginHostLoading = false;
+		renderPluginHost();
+		renderPluginPanel();
+	});
+}
+
+function createPluginPanel() {
+	var panel = E('section', { 'class': 'ufi-panel ufi-plugin-store-panel', 'data-panel': 'plugin' }, [
+		E('div', { 'class': 'ufi-panel-head' }, [
+			E('h3', {}, '插件下载'),
+			E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-close-panel': '1' }, '关闭')
+		]),
+		E('div', { 'class': 'ufi-stack' }, [
+			E('div', { 'class': 'ufi-card' }, [
+				E('div', { 'class': 'ufi-panel-head' }, [
+					E('h3', {}, '插件商店')
+				]),
+				E('div', { 'class': 'ufi-note' }, '这里仅保留插件下载安装入口。插件安装完成后，会直接在当前页面最下方的“插件加载区”中挂载自己的组件。'),
+				E('div', { 'class': 'ufi-plugin-store-actions' }, [
+					E('div', { 'class': 'ufi-plugin-store-status', id: 'pluginStoreStatus' }, '未加载'),
+					E('div', { 'class': 'ufi-actions' }, [
+						E('button', { 'class': 'cbi-button cbi-button-neutral', id: 'pluginStoreReloadBtn' }, '刷新商店')
+					])
+				]),
+				E('div', { 'class': 'ufi-plugin-store-bar' }, [
+					E('input', {
+						id: 'pluginStoreSearch',
+						type: 'text',
+						placeholder: '搜索插件名称'
+					}),
+					E('div', { 'class': 'ufi-plugin-store-summary', id: 'pluginStoreSummary' }, '已安装 0 个插件'),
+					E('div', { 'class': 'ufi-plugin-store-page' }, [
+						E('button', { 'class': 'cbi-button cbi-button-neutral', id: 'pluginStorePrevBtn' }, '上一页'),
+						E('span', { id: 'pluginStorePageText' }, '第 1 页'),
+						E('button', { 'class': 'cbi-button cbi-button-neutral', id: 'pluginStoreNextBtn' }, '下一页')
+					])
+				]),
+				E('div', { 'class': 'ufi-plugin-store-list', id: 'pluginStoreList' }, [
+					E('div', { 'class': 'ufi-empty' }, '暂无插件商店数据')
+				])
+			])
+		])
+	]);
+
+	panel.hidden = true;
+	return panel;
+}
+
+function createPluginHostSection() {
+	return E('section', { 'class': 'ufi-card ufi-plugin-host-shell' }, [
+		E('div', { 'class': 'ufi-panel-head' }, [
+			E('h3', {}, '插件加载区'),
+			E('div', { 'class': 'ufi-actions' }, [
+				E('button', { 'class': 'cbi-button cbi-button-neutral', id: 'pluginReloadBtn' }, '重新加载插件')
+			])
+		]),
+		E('div', { 'class': 'ufi-note', id: 'pluginHostNote' }, '已安装插件会在这里自动挂载自己的组件。插件下载入口在上方“功能入口”里。'),
+		E('div', { 'class': 'ufi-plugin-host-meta' }, [
+			E('div', {}, [
+				E('span', {}, '已安装插件'),
+				E('strong', { id: 'pluginHostCount' }, '0')
+			]),
+			E('div', {}, [
+				E('span', {}, '加载状态'),
+				E('strong', { id: 'pluginHostStatus' }, '未加载')
+			])
+		]),
+		E('section', { 'class': 'ufi-plugin-compat-shell', id: 'pluginCompatRoot', 'data-ufi-plugin-compat': '1' }, [
+			E('div', { 'class': 'ufi-plugin-compat-head' }, [
+				E('strong', {}, '兼容页面区域'),
+				E('span', { id: 'pluginCompatStatus' }, '兼容宿主已就绪')
+			]),
+			E('div', { id: 'BG', 'class': 'ufi-plugin-compat-bg' }, [
+				E('div', { id: 'BG_OVERLAY', 'class': 'ufi-plugin-compat-overlay' }, [
+					E('section', { 'class': 'ufi-plugin-compat-container container', id: 'pluginCompatContainer' }, [
+						E('div', { 'class': 'title main-title ufi-plugin-compat-main-title' }, [
+							E('strong', { id: 'MAIN_TITLE' }, 'UFI-TOOLS'),
+							E('span', {}, '设备:'),
+							E('strong', { id: 'MODEL' }, text((state.versionInfo && state.versionInfo.model) || (state.baseInfo && state.baseInfo.model), ''))
+						]),
+				E('section', { 'class': 'kano_function_main func_list_container' }, [
+					E('div', { 'class': 'title ufi-plugin-compat-title', id: 'collapseBtn_menu' }, [
+						E('strong', {}, '功能列表')
+					]),
+					E('div', { 'class': 'functions-container actions collapse collapse_menu', 'data-name': 'close' }, [
+						E('div', { 'class': 'collapse_box actions-buttons' }, [
+							E('button', { 'class': 'btn ufi-plugin-compat-btn', id: 'PLUGIN_SETTING', type: 'button' }, '插件功能'),
+							E('button', { 'class': 'btn ufi-plugin-compat-btn', id: 'ADVANCE', type: 'button' }, '高级功能'),
+							E('div', { 'class': 'btn ufi-plugin-compat-btn', id: 'USBStatusManagement' }, 'USB 调试')
+						])
+					])
+				]),
+				E('section', { 'class': 'kano_function_main status-container' }, [
+					E('div', { 'class': 'title ufi-plugin-compat-title' }, [
+						E('strong', {}, '状态区'),
+						E('div', { style: 'display:inline-block;', id: 'collapse_status_btn' })
+					]),
+					E('div', { 'class': 'collapse', id: 'collapse_status', 'data-name': 'open' }, [
+						E('div', { 'class': 'collapse_box' }, [
+							E('ul', { 'class': 'deviceList ufi-plugin-compat-status-list', id: 'STATUS' }, [
+								E('li', { 'class': 'ufi-plugin-compat-empty' }, '旧插件兼容页面已就绪，等待插件接管')
+							])
+						])
+					])
+				]),
+				E('div', { 'class': 'ufi-plugin-compat-body', id: 'pluginCompatBody' }),
+				E('div', { 'class': 'modal ufi-plugin-compat-sms-modal', id: 'smsList', style: 'display:none;' }, [
+					E('div', { 'class': 'title ufi-plugin-compat-title' }, '短信列表'),
+					E('div', { 'class': 'ufi-plugin-compat-input-row' }, [
+						E('input', { id: 'PhoneInput', type: 'number', placeholder: '手机号' })
+					]),
+					E('ul', { id: 'sms-list', 'class': 'ufi-plugin-compat-sms-items' }),
+					E('div', { 'class': 'ufi-plugin-compat-input-row' }, [
+						E('input', { id: 'SMSInput', type: 'text', placeholder: '输入短信内容' })
+					])
+				]),
+				E('div', { id: 'pluginCompatHidden', style: 'display:none;' }, [
+					E('button', { 'class': 'btn ufi-plugin-compat-btn', id: 'SMS', type: 'button' }, '短信收发'),
+					E('button', { 'class': 'btn ufi-plugin-compat-btn', id: 'AT', type: 'button' }, 'AT 指令'),
+					E('div', { 'class': 'btn ufi-plugin-compat-btn', id: 'UNREAD_SMS' }, '未读短信')
+				])
+					])
+				])
+			]),
+			E('div', { 'class': 'ufi-plugin-compat-dialog-shell', id: 'pluginCompatDialogBody' }),
+			E('div', { 'class': 'mask ufi-plugin-compat-modal', id: 'PluginModal', style: 'display:none;opacity:0;' }, [
+				E('div', { 'class': 'inner ufi-plugin-compat-modal-inner' }, [
+					E('strong', {}, '插件兼容弹层'),
+					E('textarea', { id: 'custom_head', hidden: 'hidden' }),
+					E('ul', { id: 'sortable-list', hidden: 'hidden' })
+				])
+			]),
+			E('div', { 'class': 'mask ufi-plugin-compat-modal', id: 'plugin_store', style: 'display:none;opacity:0;' }, [
+				E('div', { 'class': 'inner ufi-plugin-compat-modal-inner' }, [
+					E('strong', {}, '插件商店兼容弹层'),
+					E('div', { 'class': 'plugin-items' })
+				])
+			]),
+			E('div', { 'class': 'mask ufi-plugin-compat-modal', id: 'ATModal', style: 'display:none;opacity:0;' }, [
+				E('div', { 'class': 'inner ufi-plugin-compat-modal-inner' }, [
+					E('strong', {}, 'AT / 高级功能兼容弹层'),
+					E('div', { 'class': 'ufi-plugin-compat-input-row' }, [
+						E('input', { id: 'AT_INPUT', type: 'text', placeholder: '输入 AT 指令' })
+					]),
+					E('div', { 'class': 'ufi-plugin-compat-result-group' }, [
+						E('span', {}, 'AT 执行结果'),
+						E('p', { id: 'AT_RESULT', 'class': 'ufi-plugin-compat-result' }, '')
+					])
+				])
+			]),
+			E('div', { 'class': 'mask ufi-plugin-compat-modal', id: 'advanceModal', style: 'display:none;opacity:0;' }, [
+				E('div', { 'class': 'inner ufi-plugin-compat-modal-inner' }, [
+					E('strong', {}, '高级功能兼容弹层'),
+					E('div', { 'class': 'ufi-plugin-compat-result-group' }, [
+						E('span', {}, '高级功能执行结果'),
+						E('p', { id: 'AD_RESULT', 'class': 'ufi-plugin-compat-result' }, '')
+					])
+				])
+			]),
+			E('div', { 'class': 'mask ufi-plugin-compat-modal', id: 'smsForwardModal', style: 'display:none;opacity:0;' }, [
+				E('div', { 'class': 'inner ufi-plugin-compat-modal-inner' }, [
+					E('strong', {}, '短信转发兼容弹层'),
+					E('div', { style: 'display:inline-block;', id: 'collapse_smsforward_btn' }),
+					E('div', { 'class': 'collapse', id: 'collapse_smsforward', 'data-name': 'close' }, [
+						E('div', { 'class': 'collapse_box' }, [
+							E('div', { id: 'smsForward' }, '短信转发区域已就绪')
+						])
+					])
+				])
+			]),
+			E('div', { id: 'toastContainer', 'class': 'ufi-plugin-compat-toast' })
+		]),
+		E('div', { 'class': 'ufi-plugin-host-list', id: 'pluginHostList' }, [
+			E('div', { 'class': 'ufi-empty' }, '暂无已安装插件')
+		])
+	]);
+}
+
+function renderPluginHost() {
+	if (els.pluginHostCount)
+		els.pluginHostCount.textContent = String((state.pluginList || []).length);
+
+	if (els.pluginHostStatus) {
+		if (state.pluginHostError)
+			els.pluginHostStatus.textContent = state.pluginHostError;
+		else if (state.pluginHostLoading || state.pluginLoading)
+			els.pluginHostStatus.textContent = '插件加载中';
+		else if (!state.connected)
+			els.pluginHostStatus.textContent = '等待后台连接';
+		else if (state.pluginHostReady)
+			els.pluginHostStatus.textContent = '已接管 ' + state.pluginHostMountedCount + ' 个插件';
+		else
+			els.pluginHostStatus.textContent = '未加载';
+	}
+
+	if (els.pluginCompatStatus) {
+		if (state.pluginHostError)
+			els.pluginCompatStatus.textContent = state.pluginHostError;
+		else if (state.pluginHostLoading || state.pluginLoading)
+			els.pluginCompatStatus.textContent = '兼容宿主加载中';
+		else if (!state.connected)
+			els.pluginCompatStatus.textContent = '等待后台连接后加载插件';
+		else if (state.pluginHostReady)
+			els.pluginCompatStatus.textContent = '兼容宿主已接管旧插件';
+		else
+			els.pluginCompatStatus.textContent = '兼容宿主已就绪';
+	}
+
+	if (els.pluginHostNote) {
+		if (!state.connected)
+			els.pluginHostNote.textContent = '请先连接后台。连接成功后，已安装插件会在这里自动挂载自己的组件。插件下载入口在上方“功能入口”里。';
+		else
+			els.pluginHostNote.textContent = '已安装插件会在这里自动挂载自己的组件。插件下载入口在上方“功能入口”里。';
+	}
+
+	if (!els.pluginHostList)
+		return;
+
+	if (!getPluginSlotCount()) {
+		els.pluginHostList.innerHTML = '';
+		els.pluginHostList.appendChild(E('div', { 'class': 'ufi-empty' }, state.pluginHostLoading || state.pluginLoading ? '插件加载中' : (!state.connected ? '请先连接后台，插件将在连接成功后自动加载' : ((state.pluginList || []).length ? '已安装插件暂未生成独立卡片，可先查看上方兼容页面区域' : '暂无已安装插件'))));
+	}
+}
+
+function renderPluginPanel() {
+	var total = filterPluginStoreItems().length;
+	var pageCount = Math.max(1, Math.ceil(total / 10));
+	var list = els.pluginStoreList;
+	var items;
+
+	if (state.pluginStorePage > pageCount - 1)
+		state.pluginStorePage = pageCount - 1;
+
+	items = currentPluginStorePageItems();
+
+	if (els.pluginStoreSearch && els.pluginStoreSearch.value !== state.pluginStoreKeyword)
+		els.pluginStoreSearch.value = state.pluginStoreKeyword;
+
+	if (els.pluginStoreSummary)
+		els.pluginStoreSummary.textContent = '已安装 ' + (state.pluginList || []).length + ' 个插件，已接管 ' + state.pluginHostMountedCount + ' 个插件';
+
+	if (els.pluginStoreStatus) {
+		if (state.pluginStoreLoading)
+			els.pluginStoreStatus.textContent = '插件商店加载中';
+		else if (state.pluginHostError)
+			els.pluginStoreStatus.textContent = state.pluginHostError;
+		else
+			els.pluginStoreStatus.textContent = '插件商店共 ' + (state.pluginStoreItems || []).length + ' 项';
+	}
+
+	if (els.pluginStorePageText)
+		els.pluginStorePageText.textContent = '第 ' + (state.pluginStorePage + 1) + ' / ' + pageCount + ' 页';
+
+	if (els.pluginStorePrevBtn)
+		els.pluginStorePrevBtn.disabled = state.pluginStorePage <= 0;
+
+	if (els.pluginStoreNextBtn)
+		els.pluginStoreNextBtn.disabled = state.pluginStorePage >= pageCount - 1;
+
+	if (!list)
+		return;
+
+	list.innerHTML = '';
+
+	if (state.pluginStoreLoading) {
+		list.appendChild(E('div', { 'class': 'ufi-empty' }, '插件商店加载中'));
+		return;
+	}
+
+	if (!items.length) {
+		list.appendChild(E('div', { 'class': 'ufi-empty' }, total ? '当前页没有可显示的插件' : '暂无可用插件'));
+		return;
+	}
+
+	items.forEach(function(item) {
+		var name = text(item && item.name, '未命名插件');
+		var desc = text(item && (item.description || item.desc || item.note), '暂无插件说明');
+		var downloadUrl = getPluginStoreItemUrl(item);
+		var installed = (state.pluginList || []).some(function(plugin) {
+			return sanitizePluginName(plugin && plugin.name, '') === sanitizePluginName(name, '');
+		});
+		var card = E('article', { 'class': 'ufi-plugin-store-item' }, [
+			E('div', { 'class': 'ufi-plugin-store-item-head' }, [
+				E('strong', {}, name),
+				E('span', { 'class': 'ufi-plugin-store-item-tag' }, installed ? '已安装' : '未安装')
+			]),
+			E('div', { 'class': 'ufi-note' }, desc),
+			E('div', { 'class': 'ufi-plugin-store-item-actions' }, [
+				E('button', { 'class': 'cbi-button cbi-button-action' }, installed ? '更新安装' : '安装插件'),
+				E('button', { 'class': 'cbi-button cbi-button-neutral' }, '仅下载')
+			])
+		]);
+		var buttons = card.querySelectorAll('button');
+
+		buttons[0].addEventListener('click', function() {
+			installPluginFromStore(item).catch(function(err) {
+				showToast(text(err && err.message, '插件安装失败'), 'error');
+			});
+		});
+		buttons[1].addEventListener('click', function() {
+			downloadPluginText(downloadUrl, name).catch(function(err) {
+				showToast(text(err && err.message, '插件下载失败'), 'error');
+			});
+		});
+		list.appendChild(card);
 	});
 }
 
@@ -2440,6 +4455,79 @@ function appendNetworkLockUi(root) {
 		modalWrap.appendChild(createNetworkLockPanel());
 }
 
+function appendPluginUi(root) {
+	var functionGrid = root.querySelector('.ufi-function-grid');
+	var modalWrap = root.querySelector('.ufi-modal-wrap');
+	var shell = root.querySelector('.ufi-shell');
+	var style = document.createElement('style');
+
+	style.textContent = ''
+		+ '.ufi-plugin-store-panel{width:min(1080px,100%);}'
+		+ '.ufi-plugin-store-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;}'
+		+ '.ufi-plugin-store-status{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);font-size:13px;color:var(--ufi-muted);}'
+		+ '.ufi-plugin-store-bar{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:12px;align-items:center;margin-top:12px;}'
+		+ '.ufi-plugin-store-summary{font-size:13px;color:var(--ufi-muted);}'
+		+ '.ufi-plugin-store-page{display:flex;align-items:center;gap:8px;white-space:nowrap;}'
+		+ '.ufi-plugin-store-list{display:grid;gap:12px;margin-top:14px;}'
+		+ '.ufi-plugin-store-item{padding:14px 16px;border-radius:18px;background:#fff;border:1px solid var(--ufi-line);display:grid;gap:10px;}'
+		+ '.ufi-plugin-store-item-head{display:flex;justify-content:space-between;align-items:center;gap:10px;}'
+		+ '.ufi-plugin-store-item-tag{padding:4px 10px;border-radius:999px;background:#eef6ec;color:#0f766e;font-size:12px;font-weight:700;}'
+		+ '.ufi-plugin-store-item-actions{display:flex;gap:10px;flex-wrap:wrap;}'
+		+ '.ufi-plugin-host-shell{margin-top:16px;}'
+		+ '.ufi-plugin-host-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px;}'
+		+ '.ufi-plugin-host-meta div{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);}'
+		+ '.ufi-plugin-host-meta span{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}'
+		+ '.ufi-plugin-host-meta strong{font-size:16px;}'
+		+ '.ufi-plugin-compat-shell{margin-top:14px;padding:14px 16px;border-radius:18px;border:1px solid var(--ufi-line);background:linear-gradient(180deg,#fdfefe 0%,#f7fbff 100%);display:grid;gap:12px;}'
+		+ '.ufi-plugin-compat-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}'
+		+ '.ufi-plugin-compat-head span{font-size:12px;color:var(--ufi-muted);}'
+		+ '.ufi-plugin-compat-container{display:grid;gap:12px;padding:12px;border:1px solid var(--ufi-line);border-radius:16px;background:#fff;}'
+		+ '.ufi-plugin-compat-bg,.ufi-plugin-compat-overlay{display:grid;gap:12px;}'
+		+ '.ufi-plugin-compat-title{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0;}'
+		+ '.functions-container.actions.collapse.collapse_menu{display:flex;gap:10px;flex-wrap:wrap;}'
+		+ '.collapse_box.actions-buttons{display:flex;gap:10px;flex-wrap:wrap;}'
+		+ '.kano_function_main.func_list_container,.kano_function_main.status-container{display:grid;gap:10px;}'
+		+ '.ufi-plugin-compat-btn{margin:0;}'
+		+ '.ufi-plugin-compat-status-list{margin:0;padding:0;list-style:none;border:1px solid var(--ufi-line);border-radius:16px;background:#fff;min-height:72px;}'
+		+ '.ufi-plugin-compat-status-list li{padding:12px 14px;border-bottom:1px solid #edf2f5;}'
+		+ '.ufi-plugin-compat-status-list li:last-child{border-bottom:none;}'
+		+ '.ufi-plugin-compat-empty{color:var(--ufi-muted);font-size:13px;}'
+		+ '.ufi-plugin-compat-body{min-height:64px;display:grid;gap:12px;}'
+		+ '.ufi-plugin-compat-input-row{display:flex;gap:10px;align-items:center;}'
+		+ '.ufi-plugin-compat-input-row input{width:100%;padding:10px 12px;border:1px solid var(--ufi-line);border-radius:12px;background:#fff;color:var(--ufi-text);}'
+		+ '.ufi-plugin-compat-sms-modal{display:grid;gap:10px;padding:12px;border:1px solid var(--ufi-line);border-radius:16px;background:#fbfdff;}'
+		+ '.ufi-plugin-compat-sms-items{margin:0;padding:0;list-style:none;display:grid;gap:8px;min-height:24px;}'
+		+ '.ufi-plugin-compat-sms-items li{padding:10px 12px;border:1px solid var(--ufi-line);border-radius:12px;background:#fff;}'
+		+ '.ufi-plugin-compat-dialog-shell{display:grid;gap:12px;}'
+		+ '.ufi-plugin-compat-modal{position:relative;border:1px dashed var(--ufi-line);border-radius:16px;background:rgba(255,255,255,.92);padding:12px;}'
+		+ '.ufi-plugin-compat-modal-inner{display:grid;gap:10px;font-size:13px;color:var(--ufi-muted);}'
+		+ '.ufi-plugin-compat-result-group{display:grid;gap:8px;}'
+		+ '.ufi-plugin-compat-result{margin:0;padding:12px 14px;border-radius:14px;background:#fff;border:1px solid var(--ufi-line);color:var(--ufi-text);white-space:pre-wrap;word-break:break-word;min-height:44px;}'
+		+ '.ufi-plugin-compat-toast{display:grid;gap:8px;}'
+		+ '.ufi-plugin-host-list{display:grid;gap:12px;margin-top:14px;}'
+		+ '.ufi-plugin-slot{padding:14px 16px;border-radius:18px;background:#fff;border:1px solid var(--ufi-line);display:grid;gap:10px;}'
+		+ '.ufi-plugin-slot-head{display:flex;justify-content:space-between;align-items:center;gap:10px;}'
+		+ '.ufi-plugin-slot-status{font-size:12px;color:var(--ufi-muted);}'
+		+ '.ufi-plugin-slot.is-ready{border-color:#b6d5d1;background:#f7fffd;}'
+		+ '.ufi-plugin-slot.is-error{border-color:#ef9a9a;background:#fff7f7;}'
+		+ '.ufi-plugin-slot.is-loading{border-color:#d7e4ef;}'
+		+ '.ufi-plugin-slot.is-disabled{opacity:.8;background:#fbfcfd;}'
+		+ '.ufi-plugin-slot-body .ufi-note.is-error{color:#b91c1c;}'
+		+ '.ufi-plugin-slot-mount{display:grid;gap:12px;}'
+		+ '.ufi-plugin-section{border:1px dashed var(--ufi-line);border-radius:16px;padding:12px;background:#fbfdff;}'
+		+ '.ufi-plugin-section-title{font-size:13px;font-weight:700;margin-bottom:8px;}'
+		+ '.ufi-plugin-section-body{display:grid;gap:10px;}'
+		+ '@media (max-width:900px){.ufi-plugin-store-bar{grid-template-columns:1fr;}.ufi-plugin-host-meta{grid-template-columns:1fr;}.ufi-plugin-compat-head{align-items:flex-start;}}';
+
+	root.appendChild(style);
+	if (functionGrid)
+		functionGrid.appendChild(createPluginEntryButton());
+	if (modalWrap)
+		modalWrap.appendChild(createPluginPanel());
+	if (shell)
+		shell.appendChild(createPluginHostSection());
+}
+
 function renderSkeleton() {
 	var root = E('div', { 'class': 'ufi-redraw-root' });
 
@@ -2459,9 +4547,10 @@ function renderSkeleton() {
 		+ '@media (max-width:1080px){.ufi-hero,.ufi-grid,.ufi-apn-grid{grid-template-columns:1fr;}.ufi-toolbar,.ufi-function-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}@media (max-width:640px){.ufi-shell{padding:0 10px;}.ufi-toolbar,.ufi-function-grid,.ufi-summary-list,.ufi-login-grid,.ufi-kv{grid-template-columns:1fr;}.ufi-modal-wrap{padding:10px;align-items:flex-end;}.ufi-panel{padding:14px;border-radius:22px;}.ufi-hero-title{font-size:24px;}}'
 		+ '</style>'
 		+ '<div class="ufi-shell"><section class="ufi-hero"><div class="ufi-card"><h1 class="ufi-hero-title">UFI-TOOLS</h1></div><div class="ufi-card"><div class="ufi-login-grid"><label class="ufi-field" id="tokenField"><span>UFI-TOOLS 口令</span><input id="token" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>口令模式</span><select id="tokenMode"><option value="auto">自动判断</option><option value="no_token">无 UFI-TOOLS 口令</option></select></label><label class="ufi-field"><span>某兴后台密码</span><input id="password" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>登录方式</span><select id="loginMethod"><option value="0">登录方式 1</option><option value="1">登录方式 2</option></select></label><div class="ufi-field"><span>口令模式</span><div class="ufi-badge" id="needTokenTag">检测中</div></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="connectBtn">连接后台</button><button class="cbi-button cbi-button-neutral" id="refreshBtn">刷新数据</button></div></div></section><section class="ufi-toolbar"><div class="ufi-card ufi-stat"><div class="ufi-stat-label">设备型号</div><div class="ufi-stat-value" id="sumModel">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">网络类型</div><div class="ufi-stat-value" id="sumNetwork">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">实时速率</div><div class="ufi-stat-value" id="sumSpeed">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">连接状态</div><div class="ufi-stat-value" id="statusText">未连接</div><div class="ufi-note" id="statusHint"></div></div></section><section class="ufi-grid"><div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>核心状态</h3></div><div class="ufi-summary-list"><div class="ufi-summary-item"><strong>运营商</strong><span id="sumProvider">-</span></div><div class="ufi-summary-item"><strong>信号</strong><span id="sumSignal">-</span></div><div class="ufi-summary-item"><strong>CPU 温度</strong><span id="sumTemp">-</span></div><div class="ufi-summary-item"><strong>电量</strong><span id="sumBattery">-</span></div><div class="ufi-summary-item"><strong>CPU 占用</strong><span id="sumCpu">-</span></div><div class="ufi-summary-item"><strong>内存占用</strong><span id="sumMem">-</span></div><div class="ufi-summary-item"><strong>WiFi 终端</strong><span id="sumWifi">-</span></div><div class="ufi-summary-item"><strong>ADB 状态</strong><span id="sumAdb">-</span></div></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>流量摘要</h3></div><div class="ufi-kv"><div><span>今日流量</span><strong id="sumDaily">-</strong></div><div><span>本月流量</span><strong id="sumMonthly">-</strong></div></div></div></div><div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>功能入口</h3></div><div class="ufi-function-grid"><button class="ufi-function-btn" data-open-panel="sms">短信面板 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="apn">APN 管理 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="adb">ADB 设置 <span>↗</span></button></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>设备摘要</h3></div><div class="ufi-kv"><div><span>设备型号</span><strong id="sumModel2">-</strong></div><div><span>网络类型</span><strong id="sumNetwork2">-</strong></div><div><span>运营商</span><strong id="sumProvider2">-</strong></div><div><span>连接速率</span><strong id="sumSpeed2">-</strong></div></div></div></div></section></div>'
-		+ '<div class="ufi-modal-wrap" hidden><section class="ufi-panel" data-panel="sms" hidden><div class="ufi-panel-head"><h3>短信收发</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-field"><span>收件号码</span><input id="smsPhone" type="text" placeholder="手机号"></div><div class="ufi-field"><span>短信内容</span><textarea id="smsContent" rows="4" placeholder="输入短信内容"></textarea></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="smsSendBtn">发送短信</button></div><div class="ufi-sms-list" id="smsList"></div></section><section class="ufi-panel" data-panel="apn" hidden><div class="ufi-panel-head"><h3>APN 管理</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-apn-grid"><div class="ufi-apn-side"><div class="ufi-kv"><div><span>当前模式</span><strong id="apnMode">-</strong></div><div><span>当前 APN</span><strong id="apnCurrent">-</strong></div></div><label class="ufi-field"><span>模式切换</span><select id="apnModeSelect"><option value="auto">自动</option><option value="manual">手动</option></select></label><label class="ufi-field"><span>配置列表</span><select id="apnProfileSelect"></select></label><div class="ufi-actions"><button class="cbi-button cbi-button-neutral" id="apnLoadBtn">载入配置</button><button class="cbi-button cbi-button-action" id="apnApplyBtn">应用模式</button></div></div><div class="ufi-stack"><div class="ufi-field"><span>配置名称</span><input id="apnProfileName" type="text"></div><div class="ufi-field"><span>APN</span><input id="apnName" type="text"></div><div class="ufi-field"><span>用户名</span><input id="apnUsername" type="text"></div><div class="ufi-field"><span>密码</span><input id="apnPassword" type="text"></div><div class="ufi-login-grid"><label class="ufi-field"><span>鉴权方式</span><select id="apnAuth"><option value="none">NONE</option><option value="chap">CHAP</option><option value="pap">PAP</option></select></label><label class="ufi-field"><span>PDP 类型</span><select id="apnPdp"><option value="IP">IPv4</option><option value="IPv6">IPv6</option><option value="IPv4v6">IPv4v6</option></select></label></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="apnSaveBtn">保存配置</button><button class="cbi-button cbi-button-remove" id="apnDeleteBtn">删除配置</button></div></div></div></section><section class="ufi-panel" data-panel="adb" hidden><div class="ufi-panel-head"><h3>ADB 设置</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>ADB 就绪</span><strong id="adbAlive">-</strong></div><div><span>USB 调试</span><strong id="adbUsb">-</strong></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="adbUsbBtn">切换 USB 调试</button><button class="cbi-button cbi-button-neutral" id="adbWifiBtn">切换网络 ADB</button></div></section><section class="ufi-panel" data-panel="logs" hidden><div class="ufi-panel-head"><h3 id="logPanelTitle">功能日志</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-card"><div class="ufi-panel-head"><h3>连接日志</h3></div><div class="ufi-log-list" id="logList"></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>功能调用日志</h3></div><div class="ufi-log-list" id="rawLogList"></div></div></section></div><div class="ufi-toast-wrap" id="toast"></div>';
+		+ '<div class="ufi-modal-wrap" hidden><section class="ufi-panel" data-panel="sms" hidden><div class="ufi-panel-head"><h3>短信收发</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-field"><span>收件号码</span><input id="smsPhone" type="text" placeholder="手机号"></div><div class="ufi-field"><span>短信内容</span><textarea id="smsContent" rows="4" placeholder="输入短信内容"></textarea></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="smsSendBtn">发送短信</button></div><div class="ufi-sms-list" id="smsThreadList"></div></section><section class="ufi-panel" data-panel="apn" hidden><div class="ufi-panel-head"><h3>APN 管理</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-apn-grid"><div class="ufi-apn-side"><div class="ufi-kv"><div><span>当前模式</span><strong id="apnMode">-</strong></div><div><span>当前 APN</span><strong id="apnCurrent">-</strong></div></div><label class="ufi-field"><span>模式切换</span><select id="apnModeSelect"><option value="auto">自动</option><option value="manual">手动</option></select></label><label class="ufi-field"><span>配置列表</span><select id="apnProfileSelect"></select></label><div class="ufi-actions"><button class="cbi-button cbi-button-neutral" id="apnLoadBtn">载入配置</button><button class="cbi-button cbi-button-action" id="apnApplyBtn">应用模式</button></div></div><div class="ufi-stack"><div class="ufi-field"><span>配置名称</span><input id="apnProfileName" type="text"></div><div class="ufi-field"><span>APN</span><input id="apnName" type="text"></div><div class="ufi-field"><span>用户名</span><input id="apnUsername" type="text"></div><div class="ufi-field"><span>密码</span><input id="apnPassword" type="text"></div><div class="ufi-login-grid"><label class="ufi-field"><span>鉴权方式</span><select id="apnAuth"><option value="none">NONE</option><option value="chap">CHAP</option><option value="pap">PAP</option></select></label><label class="ufi-field"><span>PDP 类型</span><select id="apnPdp"><option value="IP">IPv4</option><option value="IPv6">IPv6</option><option value="IPv4v6">IPv4v6</option></select></label></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="apnSaveBtn">保存配置</button><button class="cbi-button cbi-button-remove" id="apnDeleteBtn">删除配置</button></div></div></div></section><section class="ufi-panel" data-panel="adb" hidden><div class="ufi-panel-head"><h3>ADB 设置</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>ADB 就绪</span><strong id="adbAlive">-</strong></div><div><span>USB 调试</span><strong id="adbUsb">-</strong></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="adbUsbBtn">切换 USB 调试</button><button class="cbi-button cbi-button-neutral" id="adbWifiBtn">切换网络 ADB</button></div></section><section class="ufi-panel" data-panel="logs" hidden><div class="ufi-panel-head"><h3 id="logPanelTitle">功能日志</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-card"><div class="ufi-panel-head"><h3>连接日志</h3></div><div class="ufi-log-list" id="logList"></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>功能调用日志</h3></div><div class="ufi-log-list" id="rawLogList"></div></div></section></div><div class="ufi-toast-wrap" id="toast"></div>';
 
 	appendNetworkLockUi(root);
+	appendPluginUi(root);
 	rootEl = root;
 	collectEls();
 	els.sumModel2 = root.querySelector('#sumModel2');
@@ -2476,6 +4565,8 @@ function renderSkeleton() {
 function renderAll() {
 	renderSummary();
 	renderSms();
+	renderPluginPanel();
+	renderPluginHost();
 	renderNetworkLock();
 	renderApn();
 	renderAdb();
@@ -2497,7 +4588,11 @@ function boot() {
 		pushLog('INFO', '页面初始化完成');
 		renderAll();
 		if (state.backendPassword && (!state.needToken || state.tokenHash))
-			connectBackend();
+			return connectBackend();
+		pushLog('INFO', '等待后台连接后再加载插件');
+		renderPluginHost();
+		renderPluginPanel();
+		return null;
 	}).catch(function(err) {
 		state.error = text(err.message, '初始化失败');
 		pushLog('WARN', state.error);

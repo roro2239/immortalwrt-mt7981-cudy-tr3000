@@ -2,8 +2,4 @@
 
 [ -x /www/cgi-bin/ufi-tools-proxy ] || chmod 755 /www/cgi-bin/ufi-tools-proxy 2>/dev/null
 
-if [ -x /etc/init.d/uhttpd ]; then
-	/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
-fi
-
 exit 0
