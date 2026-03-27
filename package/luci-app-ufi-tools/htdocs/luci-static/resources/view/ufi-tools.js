@@ -199,7 +199,8 @@ function stateFactory() {
 		rawLogs: [],
 		logSessionTitle: '',
 		interactiveLogActive: false,
-		timer: null
+		timer: null,
+		smsTimer: null
 	};
 }
 
@@ -985,9 +986,18 @@ function openPanel(name) {
 	rootEl.querySelector('.ufi-modal-wrap').hidden = false;
 	if (els.logPanelTitle && name === 'logs')
 		els.logPanelTitle.textContent = text(state.logSessionTitle, '功能日志');
+	if (name === 'sms') {
+		loadSms().catch(function(err) {
+			showToast(text(err && err.message, '读取短信失败'), 'error');
+		});
+		startSmsRefresh();
+	} else {
+		stopSmsRefresh();
+	}
 }
 
 function closePanels() {
+	stopSmsRefresh();
 	rootEl.querySelector('.ufi-modal-wrap').hidden = true;
 	Array.prototype.forEach.call(rootEl.querySelectorAll('.ufi-panel'), function(panel) {
 		panel.hidden = true;
@@ -1061,14 +1071,6 @@ function renderSms() {
 			E('div', { 'class': 'ufi-sms-body' }, decodeBase64(item.content || '')),
 			E('div', { 'class': 'ufi-sms-actions' }, [
 				E('button', {
-					'class': 'cbi-button cbi-button-neutral',
-					'click': function() {
-						els.smsPhone.value = text(item.number, '');
-						els.smsContent.value = decodeBase64(item.content || '');
-						closePanels();
-					}
-				}, '重发'),
-				E('button', {
 					'class': 'cbi-button cbi-button-remove',
 					'click': function() {
 						deleteSms(item.id).then(function(res) {
@@ -1138,7 +1140,7 @@ function renderAdb() {
 function loadSms() {
 	pushLog('INFO', '开始读取短信列表');
 	return getSmsInfo(0, 200).then(function(res) {
-		state.smsList = Array.isArray(res) ? res : [];
+		state.smsList = Array.isArray(res && res.messages) ? res.messages : [];
 		renderSms();
 		pushLog('INFO', '短信列表已加载，共 ' + state.smsList.length + ' 条');
 
@@ -1202,6 +1204,21 @@ function stopRefresh() {
 	if (state.timer) {
 		window.clearInterval(state.timer);
 		state.timer = null;
+	}
+}
+
+function startSmsRefresh() {
+	stopSmsRefresh();
+	state.smsTimer = window.setInterval(function() {
+		if (state.connected && !rootEl.querySelector('.ufi-panel[data-panel="sms"]').hidden)
+			loadSms().catch(function() {});
+	}, 2000);
+}
+
+function stopSmsRefresh() {
+	if (state.smsTimer) {
+		window.clearInterval(state.smsTimer);
+		state.smsTimer = null;
 	}
 }
 
