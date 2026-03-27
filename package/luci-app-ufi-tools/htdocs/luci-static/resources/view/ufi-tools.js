@@ -7,7 +7,7 @@ var AUTH_TOKEN_KEY = 'ufi_tools_token_hash';
 var TOKEN_MODE_KEY = 'ufi_tools_token_mode';
 var PASSWORD_KEY = 'ufi_tools_backend_pwd';
 var LOGIN_METHOD_KEY = 'ufi_tools_login_method';
-var APP_RELEASE = 'r62';
+var APP_RELEASE = 'r63';
 var NATIVE_FETCH = window.fetch.bind(window);
 var REFRESH_MS = 5000;
 var DEFAULT_REQUEST_TIMEOUT = 15000;
@@ -601,18 +601,23 @@ function runShellWithRootForPlugin(cmd, timeout) {
 			timeout: Number(timeout) || 10000
 		})
 	}).then(function(res) {
-		return res && res.error ? {
+		var result = res && res.error ? {
 			success: false,
 			content: text(res.error, '')
 		} : {
 			success: true,
 			content: text(res && res.result, '')
 		};
+		if (!result.success)
+			writePluginCompatResult('AD_RESULT', '执行失败：' + text(result.content, ''), true);
+		return result;
 	}).catch(function(err) {
-		return {
+		var result = {
 			success: false,
 			content: text(err && err.message, '请求失败')
 		};
+		writePluginCompatResult('AD_RESULT', '执行失败：' + text(result.content, ''), true);
+		return result;
 	});
 }
 
@@ -629,18 +634,23 @@ function runShellWithUserForPlugin(cmd, timeout) {
 			timeout: Number(timeout) || 10000
 		})
 	}).then(function(res) {
-		return res && res.error ? {
+		var result = res && res.error ? {
 			success: false,
 			content: text(res.error, '')
 		} : {
 			success: true,
 			content: text(res && res.result, '')
 		};
+		if (!result.success)
+			writePluginCompatResult('AT_RESULT', '执行失败：' + text(result.content, ''), true);
+		return result;
 	}).catch(function(err) {
-		return {
+		var result = {
 			success: false,
 			content: text(err && err.message, '请求失败')
 		};
+		writePluginCompatResult('AT_RESULT', '执行失败：' + text(result.content, ''), true);
+		return result;
 	});
 }
 
@@ -3022,7 +3032,7 @@ function resetPluginCompatDom() {
 		els.SMSInput.value = '';
 
 	if (els.collapse_status)
-		els.collapse_status.setAttribute('data-name', 'open');
+		els.collapse_status.setAttribute('data-name', 'close');
 
 	if (els.collapse_smsforward)
 		els.collapse_smsforward.setAttribute('data-name', 'close');
@@ -3053,6 +3063,26 @@ function resetPluginCompatDom() {
 
 	if (els.pluginCompatStatus)
 		els.pluginCompatStatus.textContent = '兼容宿主已就绪';
+
+	initPluginCompatCollapses();
+}
+
+function initPluginCompatCollapses() {
+	if (els.collapse_status)
+		pluginCompatCreateCollapseObserver(els.collapse_status);
+
+	if (els.collapse_smsforward)
+		pluginCompatCreateCollapseObserver(els.collapse_smsforward);
+
+	try {
+		pluginCompatCollapseGen('#collapse_status_btn', '#collapse_status', 'plugin_compat_collapse_status');
+	}
+	catch (err) {}
+
+	try {
+		pluginCompatCollapseGen('#collapse_smsforward_btn', '#collapse_smsforward', 'plugin_compat_collapse_smsforward');
+	}
+	catch (err) {}
 }
 
 function getPluginCompatSnapshot() {
@@ -3084,12 +3114,15 @@ function pluginCompatSnapshotChanged(beforeSnapshot) {
 
 function pluginCompatShowModal(selector, time, opacity) {
 	var el = document.querySelector(selector);
+	var displayMode;
 
 	if (!el)
 		return;
 
+	normalizePluginCompatModalNode(el);
 	el.style.opacity = '0';
-	el.style.display = '';
+	displayMode = shouldCapturePluginModalNode(el) ? 'flex' : '';
+	el.style.display = displayMode;
 	window.setTimeout(function() {
 		el.style.opacity = text(opacity, '1');
 	}, Number(time) > 10 ? 10 : 0);
@@ -3123,6 +3156,193 @@ function pluginCompatDebounce(fn, delay) {
 			fn.apply(self, args);
 		}, Number(delay) || 0);
 	};
+}
+
+function pluginCompatCreateSwitch(options) {
+	var config = options || {};
+	var container = E('button', {
+		type: 'button',
+		'class': 'ufi-plugin-compat-switch'
+	});
+	var knob = E('span', { 'class': 'ufi-plugin-compat-switch-knob' });
+	var checked = !!config.value;
+
+	function update(next) {
+		checked = !!next;
+		container.setAttribute('aria-pressed', checked ? 'true' : 'false');
+		container.className = 'ufi-plugin-compat-switch' + (checked ? ' is-on' : '');
+	}
+
+	container.appendChild(knob);
+	container.addEventListener('click', function() {
+		update(!checked);
+		if (typeof config.onChange === 'function')
+			config.onChange(checked);
+	});
+	container.update = update;
+	update(checked);
+
+	return container;
+}
+
+function pluginCompatCreateCollapseObserver(boxEl) {
+	var box;
+	var resizeObserver;
+	var mutationObserver;
+
+	if (!boxEl)
+		return null;
+
+	box = boxEl.querySelector('.collapse_box');
+	if (!box)
+		return { el: boxEl };
+
+	function applyState() {
+		var opened = boxEl.getAttribute('data-name') === 'open';
+
+		boxEl.style.overflow = 'hidden';
+		boxEl.style.height = opened ? (box.getBoundingClientRect().height + 'px') : '0';
+	}
+
+	if (typeof ResizeObserver !== 'undefined') {
+		resizeObserver = new ResizeObserver(function() {
+			if (boxEl.getAttribute('data-name') === 'open')
+				applyState();
+		});
+		resizeObserver.observe(box);
+	}
+
+	if (typeof MutationObserver !== 'undefined') {
+		mutationObserver = new MutationObserver(function(records) {
+			(records || []).forEach(function(record) {
+				if (record.type === 'attributes' && record.attributeName === 'data-name')
+					applyState();
+			});
+		});
+		mutationObserver.observe(boxEl, {
+			attributes: true,
+			attributeFilter: ['data-name']
+		});
+	}
+
+	applyState();
+
+	return {
+		el: boxEl,
+		destroy: function() {
+			if (resizeObserver)
+				resizeObserver.disconnect();
+			if (mutationObserver)
+				mutationObserver.disconnect();
+		}
+	};
+}
+
+function pluginCompatCollapseGen(btnId, collapseId, storName, callback) {
+	var observed = pluginCompatCreateCollapseObserver(document.querySelector(collapseId));
+	var collapseEl;
+	var collapseBtn;
+	var switchComponent;
+	var syncObserver;
+	var stored;
+
+	if (!observed || !observed.el)
+		throw new Error('缺少页面节点：' + collapseId);
+
+	collapseEl = observed.el;
+	collapseBtn = document.querySelector(btnId);
+	if (!collapseBtn)
+		throw new Error('缺少页面节点：' + btnId);
+
+	stored = storName ? localStorage.getItem(storName) : '';
+	collapseEl.dataset.name = stored || 'close';
+	if (storName && !stored)
+		localStorage.setItem(storName, 'close');
+
+	if (collapseBtn.querySelector('.ufi-plugin-compat-switch'))
+		collapseBtn.innerHTML = '';
+
+	switchComponent = pluginCompatCreateSwitch({
+		value: collapseEl.dataset.name === 'open',
+		onChange: function(newVal) {
+			collapseEl.dataset.name = newVal ? 'open' : 'close';
+			if (typeof callback === 'function')
+				callback(collapseEl.dataset.name);
+			if (storName)
+				localStorage.setItem(storName, collapseEl.dataset.name);
+		}
+	});
+
+	if (typeof MutationObserver !== 'undefined') {
+		syncObserver = new MutationObserver(function() {
+			switchComponent.update(collapseEl.dataset.name === 'open');
+		});
+		syncObserver.observe(collapseEl, {
+			attributes: true,
+			attributeFilter: ['data-name']
+		});
+	}
+
+	collapseBtn.appendChild(switchComponent);
+
+	return {
+		el: collapseEl,
+		destroy: function() {
+			if (syncObserver)
+				syncObserver.disconnect();
+			if (observed && observed.destroy)
+				observed.destroy();
+		}
+	};
+}
+
+function normalizePluginCompatModalNode(node) {
+	var inner;
+
+	if (!node || node.nodeType !== 1 || node.getAttribute('data-ufi-modal-ready') === '1')
+		return node;
+
+	node.setAttribute('data-ufi-modal-ready', '1');
+
+	if (shouldCapturePluginModalNode(node)) {
+		node.classList.add('ufi-plugin-compat-captured-modal');
+
+		if (/\bmask\b/.test(String(node.className || '')) || /Modal$/i.test(String(node.id || '')) || String(node.tagName || '').toUpperCase() === 'DIALOG') {
+			node.style.position = 'fixed';
+			node.style.left = '0';
+			node.style.top = '0';
+			node.style.right = '0';
+			node.style.bottom = '0';
+			node.style.padding = '24px';
+			node.style.alignItems = 'center';
+			node.style.justifyContent = 'center';
+			node.style.zIndex = '2600';
+			if (!node.style.background)
+				node.style.background = 'rgba(15, 23, 42, 0.35)';
+		}
+
+		inner = node.firstElementChild;
+		if (inner) {
+			inner.classList.add('ufi-plugin-compat-captured-modal-inner');
+			inner.style.position = 'relative';
+			inner.style.margin = '0 auto';
+			inner.style.maxWidth = 'min(720px, calc(100vw - 48px))';
+			inner.style.maxHeight = 'calc(100vh - 48px)';
+			inner.style.overflow = 'auto';
+		}
+	}
+
+	return node;
+}
+
+function writePluginCompatResult(id, value, isError) {
+	var target = els[id];
+
+	if (!target)
+		return;
+
+	target.textContent = text(value, '');
+	target.className = 'ufi-plugin-compat-result' + (isError ? ' is-error' : '');
 }
 
 function normalizePluginRuntimeErrorMessage(reason) {
@@ -3266,7 +3486,16 @@ function appendPluginCompatNode(node) {
 		return node;
 
 	if (shouldCapturePluginModalNode(node) && modalBody)
-		return modalBody.appendChild(node);
+		return modalBody.appendChild(normalizePluginCompatModalNode(node));
+
+	if (node.querySelectorAll) {
+		Array.prototype.forEach.call(node.querySelectorAll('.collapse'), function(collapseNode) {
+			pluginCompatCreateCollapseObserver(collapseNode);
+		});
+		Array.prototype.forEach.call(node.querySelectorAll('.mask,.modal,[id$=\"Modal\"]'), function(modalNode) {
+			normalizePluginCompatModalNode(modalNode);
+		});
+	}
 
 	if (compatBody)
 		return compatBody.appendChild(node);
@@ -3475,6 +3704,8 @@ function syncPluginCompatGlobals() {
 	window.pluginFetch = pluginCompatFetch;
 	window.__UFI_PLUGIN_FETCH__ = pluginCompatFetch;
 	window.fetchWithTimeout = pluginCompatFetchWithTimeout;
+	window.createCollapseObserver = pluginCompatCreateCollapseObserver;
+	window.collapseGen = pluginCompatCollapseGen;
 
 	compatGlobals.forEach(function(key) {
 		window[key] = els[key] || null;
@@ -3589,6 +3820,8 @@ function createPluginHostApi(name) {
 		runShellWithUser: runShellWithUserForPlugin,
 		checkAdvancedFunc: checkAdvancedFuncForPlugin,
 		requestInterval: requestIntervalForPlugin,
+		createCollapseObserver: pluginCompatCreateCollapseObserver,
+		collapseGen: pluginCompatCollapseGen,
 		getCustomHead: getCustomHead,
 		setCustomHead: setCustomHead,
 		readData: function() {
@@ -3744,6 +3977,8 @@ function ensurePluginHostBridge() {
 	window.runShellWithUser = runShellWithUserForPlugin;
 	window.checkAdvancedFunc = checkAdvancedFuncForPlugin;
 	window.requestInterval = requestIntervalForPlugin;
+	window.createCollapseObserver = pluginCompatCreateCollapseObserver;
+	window.collapseGen = pluginCompatCollapseGen;
 	window.createToast = function(message, color, delay, callback) {
 		var kind = color === 'red' ? 'error' : (color === 'green' ? 'success' : 'info');
 
@@ -3792,6 +4027,8 @@ function executeManagedPluginScript(name, scriptEl) {
 			+ 'var smsForwardModal = window.smsForwardModal;'
 			+ 'var plugin_store = window.plugin_store;'
 			+ 'var PluginModal = window.PluginModal;'
+			+ 'var createCollapseObserver = window.createCollapseObserver;'
+			+ 'var collapseGen = window.collapseGen;'
 			+ '\n';
 		var node = document.createElement('script');
 		var src = text(scriptEl.getAttribute('src'), '').trim();
@@ -4487,6 +4724,10 @@ function appendPluginUi(root) {
 		+ '.functions-container.actions.collapse.collapse_menu{display:flex;gap:10px;flex-wrap:wrap;}'
 		+ '.collapse_box.actions-buttons{display:flex;gap:10px;flex-wrap:wrap;}'
 		+ '.kano_function_main.func_list_container,.kano_function_main.status-container{display:grid;gap:10px;}'
+		+ '.ufi-plugin-compat-switch{position:relative;width:48px;height:28px;border:none;border-radius:999px;background:#d8e2e8;cursor:pointer;transition:background .2s ease;padding:0;display:inline-flex;align-items:center;}'
+		+ '.ufi-plugin-compat-switch.is-on{background:#0f766e;}'
+		+ '.ufi-plugin-compat-switch-knob{width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 2px 8px rgba(15,23,42,.18);transform:translateX(3px);transition:transform .2s ease;}'
+		+ '.ufi-plugin-compat-switch.is-on .ufi-plugin-compat-switch-knob{transform:translateX(23px);}'
 		+ '.ufi-plugin-compat-btn{margin:0;}'
 		+ '.ufi-plugin-compat-status-list{margin:0;padding:0;list-style:none;border:1px solid var(--ufi-line);border-radius:16px;background:#fff;min-height:72px;}'
 		+ '.ufi-plugin-compat-status-list li{padding:12px 14px;border-bottom:1px solid #edf2f5;}'
@@ -4499,10 +4740,12 @@ function appendPluginUi(root) {
 		+ '.ufi-plugin-compat-sms-items{margin:0;padding:0;list-style:none;display:grid;gap:8px;min-height:24px;}'
 		+ '.ufi-plugin-compat-sms-items li{padding:10px 12px;border:1px solid var(--ufi-line);border-radius:12px;background:#fff;}'
 		+ '.ufi-plugin-compat-dialog-shell{display:grid;gap:12px;}'
-		+ '.ufi-plugin-compat-modal{position:relative;border:1px dashed var(--ufi-line);border-radius:16px;background:rgba(255,255,255,.92);padding:12px;}'
-		+ '.ufi-plugin-compat-modal-inner{display:grid;gap:10px;font-size:13px;color:var(--ufi-muted);}'
+		+ '.ufi-plugin-compat-modal{position:fixed;left:0;top:0;right:0;bottom:0;display:none;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.35);z-index:2600;}'
+		+ '.ufi-plugin-compat-modal-inner,.ufi-plugin-compat-captured-modal-inner{display:grid;gap:10px;font-size:13px;color:var(--ufi-muted);width:min(720px,calc(100vw - 48px));max-height:calc(100vh - 48px);overflow:auto;padding:16px;border-radius:16px;border:1px solid var(--ufi-line);background:rgba(255,255,255,.96);box-shadow:0 24px 64px rgba(15,23,42,.2);}'
+		+ '.ufi-plugin-compat-captured-modal{display:none;}'
 		+ '.ufi-plugin-compat-result-group{display:grid;gap:8px;}'
 		+ '.ufi-plugin-compat-result{margin:0;padding:12px 14px;border-radius:14px;background:#fff;border:1px solid var(--ufi-line);color:var(--ufi-text);white-space:pre-wrap;word-break:break-word;min-height:44px;}'
+		+ '.ufi-plugin-compat-result.is-error{border-color:#ef9a9a;background:#fff7f7;color:#b91c1c;}'
 		+ '.ufi-plugin-compat-toast{display:grid;gap:8px;}'
 		+ '.ufi-plugin-host-list{display:grid;gap:12px;margin-top:14px;}'
 		+ '.ufi-plugin-slot{padding:14px 16px;border-radius:18px;background:#fff;border:1px solid var(--ufi-line);display:grid;gap:10px;}'
