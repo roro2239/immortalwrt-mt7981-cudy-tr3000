@@ -1,0 +1,212 @@
+#!/bin/sh
+
+API_BASE_URL="http://192.168.0.1:2333"
+GOFORM_BASE_URL="http://192.168.0.1:8080"
+API_HOST="192.168.0.1:2333"
+GOFORM_HOST="192.168.0.1:8080"
+
+BODY_FILE=""
+RESP_FILE=""
+HDR_FILE=""
+
+cleanup() {
+	[ -n "$BODY_FILE" ] && [ -f "$BODY_FILE" ] && rm -f "$BODY_FILE"
+	[ -n "$RESP_FILE" ] && [ -f "$RESP_FILE" ] && rm -f "$RESP_FILE"
+	[ -n "$HDR_FILE" ] && [ -f "$HDR_FILE" ] && rm -f "$HDR_FILE"
+}
+
+trap cleanup EXIT INT TERM
+
+trim_cr() {
+	printf '%s' "$1" | tr -d '\r'
+}
+
+urldecode() {
+	local data="${1//+/ }"
+	printf '%b' "${data//%/\\x}"
+}
+
+query_value() {
+	local key="$1"
+	local query="$QUERY_STRING"
+	local part raw
+
+	IFS='&'
+	for part in $query; do
+		case "$part" in
+		"$key="*)
+			raw="${part#*=}"
+			urldecode "$raw"
+			return 0
+			;;
+		esac
+	done
+	unset IFS
+
+	return 1
+}
+
+header_value() {
+	local name="$1"
+	sed -n "s/^[[:space:]]*${name}:[[:space:]]*//Ip" "$HDR_FILE" | tail -n 1 | tr -d '\r'
+}
+
+cookie_value() {
+	local cookie
+	cookie="$(header_value 'kano-cookie')"
+	[ -n "$cookie" ] && {
+		printf '%s' "$cookie"
+		return 0
+	}
+
+	cookie="$(header_value 'Set-Cookie')"
+	printf '%s' "$cookie"
+}
+
+status_code() {
+	grep -E 'HTTP/[0-9.]+ [0-9]+' "$HDR_FILE" | tail -n 1 | sed -E 's/.*HTTP\/[0-9.]+ ([0-9]+).*/\1/'
+}
+
+read_body() {
+	BODY_FILE="$(mktemp)"
+	if [ "$REQUEST_METHOD" = "POST" ] || [ "$REQUEST_METHOD" = "PUT" ]; then
+		cat > "$BODY_FILE"
+	fi
+}
+
+emit_response() {
+	local code="$1"
+	local ctype="$2"
+	local cookie="$3"
+	local dispo="$4"
+
+	[ -z "$code" ] && code="200"
+	[ -z "$ctype" ] && ctype="application/json; charset=UTF-8"
+
+	printf 'Status: %s\r\n' "$code"
+	printf 'Content-Type: %s\r\n' "$ctype"
+	printf 'Cache-Control: no-store\r\n'
+	[ -n "$cookie" ] && printf 'kano-cookie: %s\r\n' "$cookie"
+	[ -n "$dispo" ] && printf 'Content-Disposition: %s\r\n' "$dispo"
+	printf '\r\n'
+	cat "$RESP_FILE"
+}
+
+fail_json() {
+	local code="$1"
+	local msg="$2"
+	local url="$3"
+	local detail="$4"
+	printf 'Status: %s\r\n' "${code:-502}"
+	printf 'Content-Type: application/json; charset=UTF-8\r\n'
+	printf 'Cache-Control: no-store\r\n\r\n'
+	printf '{"error":"%s"' "$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+	[ -n "$url" ] && printf ',"url":"%s"' "$(printf '%s' "$url" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+	[ -n "$detail" ] && printf ',"detail":"%s"' "$(printf '%s' "$detail" | tr '\r\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+	printf '}'
+}
+
+do_request() {
+	local url="$1"
+	local base_url="$2"
+	local host_header="$3"
+	local cookie_header="$4"
+	local method="$5"
+	local content_type="$6"
+
+	RESP_FILE="$(mktemp)"
+	HDR_FILE="$(mktemp)"
+
+	set -- -q -S -O "$RESP_FILE" --timeout=12 --tries=1 \
+		--header "Referer: ${base_url}/index.html" \
+		--header "Origin: ${base_url}" \
+		--header "Host: ${host_header}"
+
+	[ -n "$HTTP_AUTHORIZATION" ] && set -- "$@" --header "Authorization: $HTTP_AUTHORIZATION"
+	[ -n "$HTTP_KANO_T" ] && set -- "$@" --header "kano-t: $HTTP_KANO_T"
+	[ -n "$HTTP_KANO_SIGN" ] && set -- "$@" --header "kano-sign: $HTTP_KANO_SIGN"
+	[ -n "$cookie_header" ] && set -- "$@" --header "Cookie: $cookie_header"
+	[ -n "$content_type" ] && set -- "$@" --header "Content-Type: $content_type"
+
+	if [ "$method" = "POST" ] || [ "$method" = "PUT" ]; then
+		if [ -n "$BODY_FILE" ] && [ -s "$BODY_FILE" ]; then
+			set -- "$@" "--post-file=$BODY_FILE"
+		else
+			set -- "$@" "--post-data="
+		fi
+	fi
+
+	set -- "$@" "$url"
+	wget "$@" 2>"$HDR_FILE"
+	return $?
+}
+
+remote_path() {
+	local path="$1"
+	case "$path" in
+	/goform/*)
+		printf '%s' "$path"
+		;;
+	/api/*)
+		printf '%s' "$path"
+		;;
+	/uploads/*)
+		printf '/api%s' "$path"
+		;;
+	/*)
+		printf '/api%s' "$path"
+		;;
+	*)
+		printf '/api/%s' "$path"
+		;;
+	esac
+}
+
+target_base() {
+	local path="$1"
+	case "$path" in
+	/goform/*)
+		printf '%s|%s' "$GOFORM_BASE_URL" "$GOFORM_HOST"
+		;;
+	*)
+		printf '%s|%s' "$API_BASE_URL" "$API_HOST"
+		;;
+	esac
+}
+
+main() {
+	local path
+	local pair base_url host_header remote url cookie_header code ctype kc dispo
+
+	read_body
+	path="$(query_value 'ufi_path' 2>/dev/null)"
+	path="$(trim_cr "$path")"
+	[ -z "$path" ] && path="${PATH_INFO:-/need_token}"
+	pair="$(target_base "$path")"
+	base_url="${pair%%|*}"
+	host_header="${pair##*|}"
+	remote="$(remote_path "$path")"
+	url="${base_url}${remote}"
+	cookie_header="$(trim_cr "$HTTP_KANO_COOKIE")"
+
+	if ! do_request "$url" "$base_url" "$host_header" "$cookie_header" "$REQUEST_METHOD" "$CONTENT_TYPE"; then
+		code="$(status_code)"
+		ctype="$(header_value 'Content-Type')"
+		kc="$(cookie_value)"
+		dispo="$(header_value 'Content-Disposition')"
+		if [ -n "$code" ] && [ -s "$RESP_FILE" ]; then
+			emit_response "$code" "$ctype" "$kc" "$dispo"
+			exit 0
+		fi
+		fail_json 502 "proxy request failed" "$url" "$(tail -c 400 "$HDR_FILE" 2>/dev/null)"
+		exit 0
+	fi
+
+	code="$(status_code)"
+	ctype="$(header_value 'Content-Type')"
+	kc="$(cookie_value)"
+	dispo="$(header_value 'Content-Disposition')"
+	emit_response "$code" "$ctype" "$kc" "$dispo"
+}
+
+main

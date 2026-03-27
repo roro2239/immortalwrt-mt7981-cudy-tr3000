@@ -1,0 +1,10 @@
+{
+  "admin/ufi_tools": {
+    "title": "UFI-TOOLS",
+    "order": 70,
+    "action": {
+      "type": "view",
+      "path": "ufi-tools"
+    }
+  }
+}
