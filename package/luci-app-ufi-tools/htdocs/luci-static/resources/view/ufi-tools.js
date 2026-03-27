@@ -7,9 +7,29 @@ var AUTH_TOKEN_KEY = 'ufi_tools_token_hash';
 var TOKEN_MODE_KEY = 'ufi_tools_token_mode';
 var PASSWORD_KEY = 'ufi_tools_backend_pwd';
 var LOGIN_METHOD_KEY = 'ufi_tools_login_method';
+var APP_RELEASE = 'r53';
 var REFRESH_MS = 5000;
 var DEFAULT_REQUEST_TIMEOUT = 15000;
 var CONNECT_TIMEOUT = 20000;
+var CELL_REFRESH_MS = REFRESH_MS + 1500;
+var NETWORK_TYPE_OPTIONS = ['WL_AND_5G', 'LTE_AND_5G', 'Only_5G', 'WCDMA_AND_LTE', 'Only_LTE', 'Only_WCDMA'];
+var BAND_OPTIONS = [
+	{ type: '4G', band: '1', label: 'B1', freq: '2100', mode: 'FDD-LTE', operator: '联通/电信' },
+	{ type: '4G', band: '3', label: 'B3', freq: '1800', mode: 'FDD-LTE', operator: '三大运营商' },
+	{ type: '4G', band: '5', label: 'B5', freq: '850', mode: 'FDD-LTE', operator: '电信' },
+	{ type: '4G', band: '8', label: 'B8', freq: '900', mode: 'FDD-LTE', operator: '移动' },
+	{ type: '4G', band: '34', label: 'B34', freq: '2000', mode: 'TD-LTE', operator: '移动' },
+	{ type: '4G', band: '38', label: 'B38', freq: '2600', mode: 'TD-LTE', operator: '移动' },
+	{ type: '4G', band: '39', label: 'B39', freq: '1900', mode: 'TD-LTE', operator: '移动' },
+	{ type: '4G', band: '40', label: 'B40', freq: '2300', mode: 'TD-LTE', operator: '移动' },
+	{ type: '4G', band: '41', label: 'B41', freq: '2500-2690', mode: 'TD-LTE', operator: '移动' },
+	{ type: '5G', band: '1', label: 'N1', freq: '1920-1980 / 2110-2170', mode: 'FDD', operator: '联通/电信' },
+	{ type: '5G', band: '5', label: 'N5', freq: '824-849 / 869-894', mode: 'FDD', operator: '电信' },
+	{ type: '5G', band: '8', label: 'N8', freq: '880-915 / 925-960', mode: 'FDD', operator: '移动' },
+	{ type: '5G', band: '28', label: 'N28', freq: '703-748 / 758-803', mode: 'FDD', operator: '广电/移动' },
+	{ type: '5G', band: '41', label: 'N41', freq: '2515-2675', mode: 'TDD', operator: '移动' },
+	{ type: '5G', band: '78', label: 'N78', freq: '3300-3600', mode: 'TDD', operator: '联通/电信' }
+];
 
 function ensureScript(src) {
 	if (window.CryptoJS)
@@ -194,13 +214,18 @@ function stateFactory() {
 		adbAlive: false,
 		apnData: null,
 		smsList: [],
+		bandLockData: null,
+		neighborCells: [],
+		lockedCells: [],
 		error: '',
 		logs: [],
 		rawLogs: [],
 		logSessionTitle: '',
 		interactiveLogActive: false,
 		timer: null,
-		smsTimer: null
+		smsTimer: null,
+		cellTimer: null,
+		cellRefreshPaused: false
 	};
 }
 
@@ -248,6 +273,8 @@ function startInteractiveLog(title) {
 	state.rawLogs = [];
 	state.logSessionTitle = text(title, '功能日志');
 	state.interactiveLogActive = true;
+	pushLog('INFO', '当前前端版本：' + APP_RELEASE);
+	pushRawLog('前端版本', 'BUILD', APP_RELEASE);
 	renderLogs();
 	renderRawLogs();
 	openPanel('logs');
@@ -525,6 +552,8 @@ function logout() {
 		state.cookie = '';
 		state.connected = false;
 		stopRefresh();
+		stopSmsRefresh();
+		stopCellRefresh();
 		pushLog('INFO', '后台已断开');
 	});
 }
@@ -601,7 +630,7 @@ function getConnInfo() {
 
 function getUFIData() {
 	var params = new URLSearchParams();
-	var cmd = 'usb_port_switch,battery_charging,sms_received_flag,sms_unread_num,sms_sim_unread_num,sim_msisdn,data_volume_limit_switch,battery_value,battery_vol_percent,network_signalbar,network_rssi,cr_version,iccid,imei,imsi,ipv6_wan_ipaddr,lan_ipaddr,mac_address,msisdn,network_information,Lte_ca_status,rssi,Z5g_rsrp,lte_rsrp,wifi_access_sta_num,loginfo,data_volume_alert_percent,data_volume_limit_size,realtime_rx_thrpt,realtime_tx_thrpt,realtime_time,monthly_tx_bytes,monthly_rx_bytes,monthly_time,network_type,network_provider,ppp_status';
+	var cmd = 'usb_port_switch,battery_charging,sms_received_flag,sms_unread_num,sms_sim_unread_num,sim_msisdn,data_volume_limit_switch,battery_value,battery_vol_percent,network_signalbar,network_rssi,cr_version,iccid,imei,imsi,ipv6_wan_ipaddr,lan_ipaddr,mac_address,msisdn,network_information,Lte_ca_status,rssi,Z5g_rsrp,lte_rsrp,wifi_access_sta_num,loginfo,data_volume_alert_percent,data_volume_limit_size,realtime_rx_thrpt,realtime_tx_thrpt,realtime_time,monthly_tx_bytes,monthly_rx_bytes,monthly_time,network_type,network_provider,ppp_status,Nr_bands,Nr_bands_widths,Nr_pci,Nr_cell_id,Nr_fcn,Nr_snr,nr_rsrq,Lte_bands,Lte_bands_widths,Lte_pci,Lte_cell_id,Lte_fcn,Lte_snr,lte_rsrq';
 	params.append('multi_data', '1');
 	params.append('isTest', 'false');
 	params.append('cmd', cmd);
@@ -632,6 +661,437 @@ function getDataUsage() {
 	}).catch(function() {
 		return null;
 	});
+}
+
+function getBandLockData() {
+	return getData({
+		cmd: 'lte_band_lock,nr_band_lock'
+	});
+}
+
+function getCellLockData() {
+	return getData({
+		cmd: 'neighbor_cell_info,locked_cell_info'
+	});
+}
+
+function parseBandLock(value) {
+	if (!hasText(value))
+		return [];
+
+	return String(value).split(',').map(function(item) {
+		return String(item || '').trim();
+	}).filter(Boolean);
+}
+
+function getCurrentCellInfo(data) {
+	var source = data || {};
+
+	if (hasText(source.Nr_pci) && hasText(source.Nr_fcn)) {
+		return {
+			rat: '16',
+			ratLabel: '5G',
+			band: hasText(source.Nr_bands) ? 'N' + source.Nr_bands : '5G',
+			pci: text(source.Nr_pci, ''),
+			earfcn: text(source.Nr_fcn, ''),
+			rsrp: text(source.Z5g_rsrp, '-'),
+			sinr: text(source.Nr_snr, '-'),
+			rsrq: text(source.nr_rsrq, '-')
+		};
+	}
+
+	if (hasText(source.Lte_pci) && hasText(source.Lte_fcn)) {
+		return {
+			rat: '12',
+			ratLabel: '4G',
+			band: hasText(source.Lte_bands) ? 'B' + source.Lte_bands : '4G',
+			pci: text(source.Lte_pci, ''),
+			earfcn: text(source.Lte_fcn, ''),
+			rsrp: text(source.lte_rsrp, '-'),
+			sinr: text(source.Lte_snr, '-'),
+			rsrq: text(source.lte_rsrq, '-')
+		};
+	}
+
+	return null;
+}
+
+function resolveCellRat(item) {
+	var rat = text(item && item.rat, '');
+	var band = String(text(item && item.band, '')).toUpperCase();
+
+	if (rat === '16')
+		return '16';
+	if (rat === '12')
+		return '12';
+	if (band.indexOf('N') === 0)
+		return '16';
+
+	return '12';
+}
+
+function loadBandLockData() {
+	return getBandLockData().then(function(res) {
+		state.bandLockData = res || {};
+		renderNetworkLock();
+		return state.bandLockData;
+	});
+}
+
+function loadCellLockData() {
+	return getCellLockData().then(function(res) {
+		state.neighborCells = Array.isArray(res && res.neighbor_cell_info) ? res.neighbor_cell_info : [];
+		state.lockedCells = Array.isArray(res && res.locked_cell_info) ? res.locked_cell_info : [];
+		renderNetworkLock();
+		return res || {};
+	});
+}
+
+function loadNetworkLock() {
+	return Promise.all([
+		loadBandLockData(),
+		loadCellLockData(),
+		loadCurrentCellData()
+	]);
+}
+
+function loadCurrentCellData() {
+	return getUFIData().then(function(res) {
+		if (res)
+			state.ufiData = res;
+
+		renderSummary();
+		renderNetworkLock();
+		return state.ufiData;
+	});
+}
+
+function toggleAllBandBoxes(checked) {
+	if (!els.bandLockTable)
+		return;
+
+	Array.prototype.forEach.call(els.bandLockTable.querySelectorAll('input[type="checkbox"]'), function(input) {
+		input.checked = !!checked;
+	});
+
+	updateBandSelectAll();
+}
+
+function updateBandSelectAll() {
+	if (!els.bandSelectAll || !els.bandLockTable)
+		return;
+
+	var boxes = els.bandLockTable.querySelectorAll('input[type="checkbox"]');
+	var checkedCount = 0;
+
+	Array.prototype.forEach.call(boxes, function(input) {
+		if (input.checked)
+			checkedCount++;
+	});
+
+	els.bandSelectAll.checked = !!boxes.length && checkedCount === boxes.length;
+	els.bandSelectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+}
+
+function collectSelectedBands() {
+	var lteBands = [];
+	var nrBands = [];
+
+	if (!els.bandLockTable)
+		return { lteBands: lteBands, nrBands: nrBands };
+
+	Array.prototype.forEach.call(els.bandLockTable.querySelectorAll('input[type="checkbox"]:checked'), function(input) {
+		var type = input.dataset.type;
+		var band = input.dataset.band;
+
+		if (!type || !band)
+			return;
+
+		if (type === '4G')
+			lteBands.push(band);
+		else if (type === '5G')
+			nrBands.push(band);
+	});
+
+	return {
+		lteBands: lteBands,
+		nrBands: nrBands
+	};
+}
+
+function isFormSuccess(res) {
+	var result = text(res && res.result, '');
+
+	return result === 'success' || result === '0' || result === '0.0';
+}
+
+function isFormAccepted(res) {
+	return !!res && (isFormSuccess(res) || !!res.__empty);
+}
+
+function normalizeBandList(list) {
+	return (Array.isArray(list) ? list : []).map(function(item) {
+		return String(item || '').trim();
+	}).filter(Boolean).sort(function(a, b) {
+		var na = Number(a);
+		var nb = Number(b);
+
+		if (isFinite(na) && isFinite(nb) && na !== nb)
+			return na - nb;
+
+		return a.localeCompare(b);
+	});
+}
+
+function sameBandSelection(actual, expected) {
+	var left = normalizeBandList(actual);
+	var right = normalizeBandList(expected);
+
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function verifyBandLocks(lteBands, nrBands) {
+	return getBandLockData().then(function(res) {
+		var actualLte = parseBandLock(res && res.lte_band_lock);
+		var actualNr = parseBandLock(res && res.nr_band_lock);
+		var expectedLte = normalizeBandList(lteBands);
+		var expectedNr = normalizeBandList(nrBands);
+
+		pushRawLog('锁频段校验', '回读', JSON.stringify({
+			lte_expected: expectedLte,
+			lte_actual: normalizeBandList(actualLte),
+			nr_expected: expectedNr,
+			nr_actual: normalizeBandList(actualNr)
+		}));
+
+		if (!sameBandSelection(actualLte, expectedLte) || !sameBandSelection(actualNr, expectedNr))
+			throw new Error('锁定频段失败：回读结果与目标频段不一致');
+
+		state.bandLockData = res || {};
+		renderNetworkLock();
+		pushLog('INFO', '锁频段：回读确认成功');
+		return state.bandLockData;
+	});
+}
+
+function sameCellLock(item, rat, pci, earfcn) {
+	return text(resolveCellRat(item), '').trim() === text(rat, '').trim()
+		&& text(item && item.pci, '').trim() === text(pci, '').trim()
+		&& text(item && item.earfcn, '').trim() === text(earfcn, '').trim();
+}
+
+function verifyCellLock(rat, pci, earfcn) {
+	return getCellLockData().then(function(res) {
+		var list = Array.isArray(res && res.locked_cell_info) ? res.locked_cell_info : [];
+		var found = list.find(function(item) {
+			return sameCellLock(item, rat, pci, earfcn);
+		});
+
+		pushRawLog('锁基站校验', found ? '匹配' : '未匹配', JSON.stringify({
+			rat: rat,
+			pci: pci,
+			earfcn: earfcn,
+			lockedCount: list.length
+		}));
+
+		if (!found)
+			throw new Error('锁定基站失败：回读未发现目标基站');
+
+		state.lockedCells = list;
+		renderNetworkLock();
+		pushLog('INFO', '锁基站：回读确认成功');
+		return found;
+	});
+}
+
+function verifyUnlockAllCells() {
+	return getCellLockData().then(function(res) {
+		var list = Array.isArray(res && res.locked_cell_info) ? res.locked_cell_info : [];
+
+		pushRawLog('解除基站锁定校验', list.length ? '仍有锁定' : '已清空', JSON.stringify({
+			lockedCount: list.length
+		}));
+
+		if (list.length)
+			throw new Error('解除锁定基站失败：回读仍存在已锁基站');
+
+		state.lockedCells = list;
+		renderNetworkLock();
+		pushLog('INFO', '解除基站锁定：回读确认成功');
+		return null;
+	});
+}
+
+function bounceBearerPreference() {
+	return getData({
+		cmd: 'net_select'
+	}).then(function(res) {
+		var current = text(res && res.net_select, '');
+		var temp = NETWORK_TYPE_OPTIONS.find(function(item) {
+			return item !== current;
+		});
+
+		if (!current || !temp)
+			return null;
+
+		pushLog('INFO', '锁频段：开始切网应用配置');
+		return postData({
+			goformId: 'SET_BEARER_PREFERENCE',
+			BearerPreference: temp
+		}).then(function(resp) {
+			return parseOptionalJsonResponse(resp, '切换网络类型');
+		}).then(function() {
+			return delay(800);
+		}).then(function() {
+			return postData({
+				goformId: 'SET_BEARER_PREFERENCE',
+				BearerPreference: current
+			});
+		}).then(function(resp) {
+			return parseOptionalJsonResponse(resp, '恢复网络类型');
+		}).then(function() {
+			pushLog('INFO', '锁频段：切网应用完成');
+			return null;
+		});
+	}).catch(function(err) {
+		pushLog('WARN', '锁频段：切网应用失败，已跳过。' + text(err && err.message, ''));
+		return null;
+	});
+}
+
+function saveBandLocks(lteBands, nrBands) {
+	var targetLte = normalizeBandList(lteBands);
+	var targetNr = normalizeBandList(nrBands);
+
+	pushLog('INFO', '锁频段：开始提交 4G 频段');
+	return postData({
+		goformId: 'LTE_BAND_LOCK',
+		lte_band_lock: targetLte.join(',')
+	}).then(function(res) {
+		return parseOptionalJsonResponse(res, '锁定 4G 频段');
+	}).then(function(res) {
+		if (!isFormAccepted(res))
+			throw new Error('锁定 4G 频段失败');
+
+		pushLog('INFO', '锁频段：开始提交 5G 频段');
+		return postData({
+			goformId: 'NR_BAND_LOCK',
+			nr_band_lock: targetNr.join(',')
+		});
+	}).then(function(res) {
+		return parseOptionalJsonResponse(res, '锁定 5G 频段');
+	}).then(function(res) {
+		if (!isFormAccepted(res))
+			throw new Error('锁定 5G 频段失败');
+
+		return bounceBearerPreference();
+	}).then(function() {
+		return verifyBandLocks(targetLte, targetNr);
+	}).then(function() {
+		return loadNetworkLock();
+	});
+}
+
+function restoreAllBands() {
+	var lteBands = BAND_OPTIONS.filter(function(item) {
+		return item.type === '4G';
+	}).map(function(item) {
+		return item.band;
+	});
+	var nrBands = BAND_OPTIONS.filter(function(item) {
+		return item.type === '5G';
+	}).map(function(item) {
+		return item.band;
+	});
+
+	return saveBandLocks(lteBands, nrBands);
+}
+
+function fillCellLockForm(cell) {
+	if (!cell || !els.cellRatSelect || !els.lockCellPci || !els.lockCellEarfcn)
+		return;
+
+	els.cellRatSelect.value = text(cell.rat, '16');
+	els.lockCellPci.value = text(cell.pci, '');
+	els.lockCellEarfcn.value = text(cell.earfcn, '');
+}
+
+function lockSelectedCell() {
+	var rat = text(els.cellRatSelect && els.cellRatSelect.value, '').trim();
+	var pci = text(els.lockCellPci && els.lockCellPci.value, '').trim();
+	var earfcn = text(els.lockCellEarfcn && els.lockCellEarfcn.value, '').trim();
+
+	if (!rat || !pci || !earfcn)
+		return Promise.reject(new Error('请完整填写 RAT、PCI 和频率'));
+
+	return postData({
+		goformId: 'CELL_LOCK',
+		rat: rat,
+		pci: pci,
+		earfcn: earfcn
+	}).then(function(res) {
+		return parseOptionalJsonResponse(res, '锁定基站');
+	}).then(function(res) {
+		if (!isFormAccepted(res))
+			throw new Error('锁定基站失败');
+
+		els.lockCellPci.value = '';
+		els.lockCellEarfcn.value = '';
+		return verifyCellLock(rat, pci, earfcn);
+	}).then(function() {
+		return loadCellLockData();
+	});
+}
+
+function unlockAllCells() {
+	return postData({
+		goformId: 'UNLOCK_ALL_CELL'
+	}).then(function(res) {
+		return parseOptionalJsonResponse(res, '解除锁定基站');
+	}).then(function(res) {
+		if (!isFormAccepted(res))
+			throw new Error('解除锁定基站失败');
+
+		return verifyUnlockAllCells();
+	}).then(function() {
+		return loadCellLockData();
+	});
+}
+
+function startCellRefresh() {
+	stopCellRefresh();
+	state.cellRefreshPaused = false;
+	renderNetworkLock();
+	state.cellTimer = window.setInterval(function() {
+		var panel = rootEl && rootEl.querySelector('.ufi-panel[data-panel="network"]');
+
+		if (!state.connected || state.cellRefreshPaused || !panel || panel.hidden)
+			return;
+
+		Promise.all([
+			loadCellLockData(),
+			loadCurrentCellData()
+		]).catch(function() {});
+	}, CELL_REFRESH_MS);
+}
+
+function stopCellRefresh() {
+	if (state.cellTimer) {
+		window.clearInterval(state.cellTimer);
+		state.cellTimer = null;
+	}
+}
+
+function toggleCellRefresh() {
+	state.cellRefreshPaused = !state.cellRefreshPaused;
+	renderNetworkLock();
+
+	if (!state.cellRefreshPaused) {
+		Promise.all([
+			loadCellLockData(),
+			loadCurrentCellData()
+		]).catch(function() {});
+	}
 }
 
 function getSmsInfo(page, pageSize) {
@@ -991,13 +1451,22 @@ function openPanel(name) {
 			showToast(text(err && err.message, '读取短信失败'), 'error');
 		});
 		startSmsRefresh();
+		stopCellRefresh();
+	} else if (name === 'network') {
+		loadNetworkLock().catch(function(err) {
+			showToast(text(err && err.message, '读取网络锁定信息失败'), 'error');
+		});
+		stopSmsRefresh();
+		startCellRefresh();
 	} else {
 		stopSmsRefresh();
+		stopCellRefresh();
 	}
 }
 
 function closePanels() {
 	stopSmsRefresh();
+	stopCellRefresh();
 	rootEl.querySelector('.ufi-modal-wrap').hidden = true;
 	Array.prototype.forEach.call(rootEl.querySelectorAll('.ufi-panel'), function(panel) {
 		panel.hidden = true;
@@ -1020,11 +1489,153 @@ function syncExtraSummary() {
 		els.sumSpeed2.textContent = els.sumSpeed.textContent;
 }
 
+function renderBandLockTable() {
+	var body = els.bandLockTable;
+	var bandData = state.bandLockData || {};
+	var lteBands = parseBandLock(bandData.lte_band_lock);
+	var nrBands = parseBandLock(bandData.nr_band_lock);
+
+	if (!body)
+		return;
+
+	body.innerHTML = '';
+	BAND_OPTIONS.forEach(function(item) {
+		var checked = item.type === '4G' ? lteBands.indexOf(item.band) >= 0 : nrBands.indexOf(item.band) >= 0;
+		var input = E('input', {
+			type: 'checkbox',
+			'data-type': item.type,
+			'data-band': item.band
+		});
+
+		input.checked = checked;
+		input.addEventListener('change', updateBandSelectAll);
+		body.appendChild(E('tr', {}, [
+			E('td', {}, input),
+			E('td', {}, item.label),
+			E('td', {}, item.freq),
+			E('td', {}, item.mode),
+			E('td', {}, item.operator)
+		]));
+	});
+
+	updateBandSelectAll();
+}
+
+function renderLockedCellTable() {
+	var body = els.lockedCellTable;
+	var rows = state.lockedCells || [];
+
+	if (!body)
+		return;
+
+	body.innerHTML = '';
+	if (!rows.length) {
+		body.appendChild(E('tr', {}, [
+			E('td', { colspan: '3', 'class': 'ufi-empty-cell' }, '当前没有已锁基站')
+		]));
+		return;
+	}
+
+	rows.forEach(function(item) {
+		var rat = resolveCellRat(item);
+		body.appendChild(E('tr', {}, [
+			E('td', {}, rat === '16' ? '5G' : '4G'),
+			E('td', {}, text(item.pci, '-')),
+			E('td', {}, text(item.earfcn, '-'))
+		]));
+	});
+}
+
+function renderCurrentCellTable() {
+	var body = els.currentCellTable;
+	var summary = els.currentCellSummary;
+	var currentCell = getCurrentCellInfo(state.ufiData);
+
+	if (!body || !summary)
+		return;
+
+	body.innerHTML = '';
+	if (!currentCell) {
+		summary.innerHTML = '当前未识别到可锁定的 4G / 5G 基站信息。';
+		body.appendChild(E('tr', {}, [
+			E('td', { colspan: '6', 'class': 'ufi-empty-cell' }, '暂无当前基站信息')
+		]));
+		return;
+	}
+
+	summary.innerHTML = '当前基站：<strong>' + currentCell.ratLabel + '</strong> / <strong>' + text(currentCell.band, '-') + '</strong>，可直接填入锁定表单。';
+	body.appendChild(E('tr', {}, [
+		E('td', {}, text(currentCell.band, '-')),
+		E('td', {}, text(currentCell.earfcn, '-')),
+		E('td', {}, text(currentCell.pci, '-')),
+		E('td', {}, text(currentCell.rsrp, '-')),
+		E('td', {}, text(currentCell.sinr, '-')),
+		E('td', {}, text(currentCell.rsrq, '-'))
+	]));
+}
+
+function renderNeighborCellTable() {
+	var body = els.neighborCellTable;
+	var rows = state.neighborCells || [];
+
+	if (!body)
+		return;
+
+	body.innerHTML = '';
+	if (!rows.length) {
+		body.appendChild(E('tr', {}, [
+			E('td', { colspan: '6', 'class': 'ufi-empty-cell' }, '暂无可用邻区信息')
+		]));
+		return;
+	}
+
+	rows.forEach(function(item) {
+		var cell = {
+			rat: resolveCellRat(item),
+			pci: text(item.pci, ''),
+			earfcn: text(item.earfcn, ''),
+			band: text(item.band, '-'),
+			rsrp: text(item.rsrp, '-'),
+			sinr: text(item.sinr, '-'),
+			rsrq: text(item.rsrq, '-')
+		};
+		var row = E('tr', { 'class': 'is-selectable' }, [
+			E('td', {}, cell.band),
+			E('td', {}, cell.earfcn),
+			E('td', {}, cell.pci),
+			E('td', {}, cell.rsrp),
+			E('td', {}, cell.sinr),
+			E('td', {}, cell.rsrq)
+		]);
+
+		row.addEventListener('click', function() {
+			fillCellLockForm(cell);
+			showToast('已选择基站：PCI ' + cell.pci + ' / 频率 ' + cell.earfcn, 'success');
+		});
+		body.appendChild(row);
+	});
+}
+
+function renderNetworkLock() {
+	if (!els.bandLockTable)
+		return;
+
+	renderBandLockTable();
+	renderLockedCellTable();
+	renderCurrentCellTable();
+	renderNeighborCellTable();
+
+	if (els.cellRefreshBtn)
+		els.cellRefreshBtn.textContent = state.cellRefreshPaused ? '开始刷新' : '停止刷新';
+}
+
 function renderSummary() {
 	var data = state.ufiData || {};
 	var usage = state.dataUsage || {};
 	var signal = data.network_signalbar || data.network_rssi || data.rssi || '-';
-	var batteryText = hasText(data.battery_value) ? data.battery_value : (hasText(data.battery_vol_percent) ? data.battery_vol_percent : data.battery);
+	var batteryText = hasText(data.battery_value) ? data.battery_value : (hasText(data.battery_vol_percent) ? data.battery_vol_percent : '');
+	var dailyText = hasText(data.daily_data) ? formatBytes(data.daily_data) : '-';
+	var monthlyTotal = hasText(data.monthly_data) ? formatBytes(data.monthly_data) : formatBytes((Number(data.monthly_tx_bytes) || 0) + (Number(data.monthly_rx_bytes) || 0));
 
 	setSummaryItem('sumModel', data.MODEL || data.model || data.hardware_version || (state.versionInfo && state.versionInfo.model));
 	setSummaryItem('sumNetwork', data.network_type || data.network_information);
@@ -1036,8 +1647,8 @@ function renderSummary() {
 	setSummaryItem('sumBattery', hasText(batteryText) ? batteryText + '%' : '-');
 	setSummaryItem('sumSignal', signal);
 	setSummaryItem('sumWifi', data.wifi_access_sta_num);
-	setSummaryItem('sumDaily', hasText(data.daily_data) ? data.daily_data : formatBytes((Number(usage.monthly_tx_bytes) || 0) + (Number(usage.monthly_rx_bytes) || 0)));
-	setSummaryItem('sumMonthly', formatBytes((Number(data.monthly_tx_bytes) || 0) + (Number(data.monthly_rx_bytes) || 0)));
+	setSummaryItem('sumDaily', dailyText);
+	setSummaryItem('sumMonthly', monthlyTotal);
 	setSummaryItem('sumAdb', state.adbAlive ? '已就绪' : '等待中');
 	setSummaryItem('statusText', state.connected ? '已连接' : '未连接');
 	setSummaryItem('statusHint', state.error || '');
@@ -1408,6 +2019,78 @@ function bindEvents() {
 		});
 	});
 
+	els.bandSelectAll.addEventListener('change', function() {
+		toggleAllBandBoxes(els.bandSelectAll.checked);
+	});
+
+	els.bandApplyBtn.addEventListener('click', function() {
+		startInteractiveLog('锁频段日志');
+		var selected = collectSelectedBands();
+
+		if (!selected.lteBands.length && !selected.nrBands.length) {
+			stopInteractiveLog();
+			showToast('请至少选择一个频段', 'error');
+			return;
+		}
+
+		saveBandLocks(selected.lteBands, selected.nrBands).then(function() {
+			showToast('频段锁定已应用', 'success');
+		}).catch(function(err) {
+			showToast(text(err && err.message, '锁定频段失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
+		});
+	});
+
+	els.bandUnlockBtn.addEventListener('click', function() {
+		startInteractiveLog('恢复全频段日志');
+		restoreAllBands().then(function() {
+			showToast('已恢复全频段', 'success');
+		}).catch(function(err) {
+			showToast(text(err && err.message, '恢复全频段失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
+		});
+	});
+
+	els.useCurrentCellBtn.addEventListener('click', function() {
+		var currentCell = getCurrentCellInfo(state.ufiData);
+
+		if (!currentCell) {
+			showToast('当前没有可用的基站信息', 'error');
+			return;
+		}
+
+		fillCellLockForm(currentCell);
+		showToast('已填入当前基站信息', 'success');
+	});
+
+	els.cellRefreshBtn.addEventListener('click', function() {
+		toggleCellRefresh();
+	});
+
+	els.cellLockBtn.addEventListener('click', function() {
+		startInteractiveLog('锁基站日志');
+		lockSelectedCell().then(function() {
+			showToast('基站锁定已应用', 'success');
+		}).catch(function(err) {
+			showToast(text(err && err.message, '锁定基站失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
+		});
+	});
+
+	els.cellUnlockBtn.addEventListener('click', function() {
+		startInteractiveLog('解除基站锁定日志');
+		unlockAllCells().then(function() {
+			showToast('已解除全部基站锁定', 'success');
+		}).catch(function(err) {
+			showToast(text(err && err.message, '解除基站锁定失败'), 'error');
+		}).finally(function() {
+			stopInteractiveLog();
+		});
+	});
+
 	els.apnLoadBtn.addEventListener('click', function() {
 		var profiles = parseProfiles(state.apnData || {});
 		var selected = profiles.find(function(profile) {
@@ -1560,6 +2243,7 @@ function collectEls() {
 		'sumModel', 'sumNetwork', 'sumProvider', 'sumSpeed', 'sumTemp', 'sumCpu', 'sumMem', 'sumBattery', 'sumSignal', 'sumWifi', 'sumDaily', 'sumMonthly', 'sumAdb',
 		'statusText', 'statusHint',
 		'smsList', 'smsPhone', 'smsContent', 'smsSendBtn',
+		'bandSelectAll', 'bandLockTable', 'bandApplyBtn', 'bandUnlockBtn', 'lockedCellTable', 'currentCellSummary', 'currentCellTable', 'cellRefreshBtn', 'neighborCellTable', 'cellRatSelect', 'lockCellPci', 'lockCellEarfcn', 'useCurrentCellBtn', 'cellLockBtn', 'cellUnlockBtn',
 		'apnMode', 'apnCurrent', 'apnProfileSelect', 'apnProfileName', 'apnName', 'apnUsername', 'apnPassword', 'apnAuth', 'apnPdp', 'apnModeSelect', 'apnLoadBtn', 'apnApplyBtn', 'apnSaveBtn', 'apnDeleteBtn',
 		'adbAlive', 'adbUsb', 'adbUsbBtn', 'adbWifiBtn', 'logPanelTitle', 'logList', 'rawLogList'
 	].forEach(function(id) {
@@ -1609,6 +2293,153 @@ function renderRawLogs() {
 	});
 }
 
+function createNetworkEntryButton() {
+	return E('button', {
+		'class': 'ufi-function-btn',
+		'data-open-panel': 'network'
+	}, [
+		document.createTextNode('网络锁定 '),
+		E('span', {}, '↗')
+	]);
+}
+
+function createNetworkLockPanel() {
+	var panel = E('section', { 'class': 'ufi-panel', 'data-panel': 'network' }, [
+		E('div', { 'class': 'ufi-panel-head' }, [
+			E('h3', {}, '网络锁定'),
+			E('button', { 'class': 'cbi-button cbi-button-neutral', 'data-close-panel': '1' }, '关闭')
+		]),
+		E('div', { 'class': 'ufi-stack ufi-network-grid' }, [
+			E('div', { 'class': 'ufi-card ufi-network-card' }, [
+				E('div', { 'class': 'ufi-panel-head' }, [
+					E('h3', {}, '锁定频段')
+				]),
+				E('div', { 'class': 'ufi-network-note' }, '按原项目 goform 语义提交 4G / 5G 频段锁定，提交成功后会自动切网一次以应用配置。'),
+				E('label', { 'class': 'ufi-network-inline' }, [
+					E('input', { id: 'bandSelectAll', type: 'checkbox' }),
+					E('span', {}, '全选频段')
+				]),
+				E('table', { 'class': 'ufi-network-table' }, [
+					E('thead', {}, E('tr', {}, [
+						E('th', {}, '选择'),
+						E('th', {}, 'Band'),
+						E('th', {}, '频率范围'),
+						E('th', {}, '制式'),
+						E('th', {}, '运营商')
+					])),
+					E('tbody', { id: 'bandLockTable' })
+				]),
+				E('div', { 'class': 'ufi-actions' }, [
+					E('button', { 'class': 'cbi-button cbi-button-action', id: 'bandApplyBtn' }, '锁定频段'),
+					E('button', { 'class': 'cbi-button cbi-button-neutral', id: 'bandUnlockBtn' }, '恢复全频段')
+				])
+			]),
+			E('div', { 'class': 'ufi-card ufi-network-card' }, [
+				E('div', { 'class': 'ufi-panel-head' }, [
+					E('h3', {}, '锁定基站')
+				]),
+				E('div', { 'class': 'ufi-network-note' }, '锁错基站可能导致无信号。建议先观察邻区信息，再用“选择当前基站”或手动填写 PCI / 频率。'),
+				E('div', { 'class': 'ufi-panel-head' }, [
+					E('h3', {}, '已锁基站'),
+					E('button', { 'class': 'cbi-button cbi-button-neutral', id: 'cellUnlockBtn' }, '解除全部锁定')
+				]),
+				E('table', { 'class': 'ufi-network-table' }, [
+					E('thead', {}, E('tr', {}, [
+						E('th', {}, '类型'),
+						E('th', {}, 'PCI'),
+						E('th', {}, '频率')
+					])),
+					E('tbody', { id: 'lockedCellTable' })
+				]),
+				E('div', { 'class': 'ufi-network-headline' }, [
+					E('h3', {}, '当前基站'),
+					E('button', { 'class': 'cbi-button cbi-button-neutral', id: 'useCurrentCellBtn' }, '选择当前基站')
+				]),
+				E('div', { 'class': 'ufi-network-status', id: 'currentCellSummary' }, '-'),
+				E('table', { 'class': 'ufi-network-table' }, [
+					E('thead', {}, E('tr', {}, [
+						E('th', {}, '频段'),
+						E('th', {}, '频率'),
+						E('th', {}, 'PCI'),
+						E('th', {}, 'RSRP'),
+						E('th', {}, 'SINR'),
+						E('th', {}, 'RSRQ')
+					])),
+					E('tbody', { id: 'currentCellTable' })
+				]),
+				E('div', { 'class': 'ufi-network-headline' }, [
+					E('h3', {}, '邻区列表'),
+					E('button', { 'class': 'cbi-button cbi-button-neutral', id: 'cellRefreshBtn' }, '停止刷新')
+				]),
+				E('table', { 'class': 'ufi-network-table' }, [
+					E('thead', {}, E('tr', {}, [
+						E('th', {}, '频段'),
+						E('th', {}, '频率'),
+						E('th', {}, 'PCI'),
+						E('th', {}, 'RSRP'),
+						E('th', {}, 'SINR'),
+						E('th', {}, 'RSRQ')
+					])),
+					E('tbody', { id: 'neighborCellTable' })
+				]),
+				E('div', { 'class': 'ufi-network-form' }, [
+					E('label', { 'class': 'ufi-field' }, [
+						E('span', {}, '网络类型'),
+						E('select', { id: 'cellRatSelect' }, [
+							E('option', { value: '12' }, '4G'),
+							E('option', { value: '16' }, '5G')
+						])
+					]),
+					E('label', { 'class': 'ufi-field' }, [
+						E('span', {}, 'PCI'),
+						E('input', { id: 'lockCellPci', type: 'text', placeholder: 'PCI' })
+					]),
+					E('label', { 'class': 'ufi-field' }, [
+						E('span', {}, '频率'),
+						E('input', { id: 'lockCellEarfcn', type: 'text', placeholder: 'EARFCN' })
+					])
+				]),
+				E('div', { 'class': 'ufi-actions' }, [
+					E('button', { 'class': 'cbi-button cbi-button-action', id: 'cellLockBtn' }, '锁定基站')
+				])
+			])
+		])
+	]);
+
+	panel.hidden = true;
+	return panel;
+}
+
+function appendNetworkLockUi(root) {
+	var functionGrid = root.querySelector('.ufi-function-grid');
+	var modalWrap = root.querySelector('.ufi-modal-wrap');
+	var style = document.createElement('style');
+
+	style.textContent = ''
+		+ '.ufi-network-grid{display:grid;gap:14px;}'
+		+ '.ufi-network-card{display:grid;gap:12px;}'
+		+ '.ufi-network-note{font-size:12px;color:var(--ufi-muted);line-height:1.7;}'
+		+ '.ufi-network-inline{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ufi-muted);}'
+		+ '.ufi-network-headline{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}'
+		+ '.ufi-network-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}'
+		+ '.ufi-network-status{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);font-size:13px;line-height:1.7;color:var(--ufi-muted);}'
+		+ '.ufi-network-status strong{color:var(--ufi-text);}'
+		+ '.ufi-network-table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid var(--ufi-line);border-radius:18px;overflow:hidden;}'
+		+ '.ufi-network-table th,.ufi-network-table td{padding:10px 12px;border-bottom:1px solid #edf2f5;text-align:left;font-size:13px;vertical-align:middle;}'
+		+ '.ufi-network-table thead th{background:#f4f8fb;font-size:12px;color:var(--ufi-muted);font-weight:700;}'
+		+ '.ufi-network-table tbody tr:last-child td{border-bottom:none;}'
+		+ '.ufi-network-table tbody tr.is-selectable{cursor:pointer;}'
+		+ '.ufi-network-table tbody tr.is-selectable:hover{background:#f7fffd;}'
+		+ '.ufi-empty-cell{text-align:center;color:var(--ufi-muted);padding:20px 12px !important;}'
+		+ '@media (max-width:640px){.ufi-network-form{grid-template-columns:1fr;}}';
+
+	root.appendChild(style);
+	if (functionGrid)
+		functionGrid.appendChild(createNetworkEntryButton());
+	if (modalWrap)
+		modalWrap.appendChild(createNetworkLockPanel());
+}
+
 function renderSkeleton() {
 	var root = E('div', { 'class': 'ufi-redraw-root' });
 
@@ -1630,6 +2461,7 @@ function renderSkeleton() {
 		+ '<div class="ufi-shell"><section class="ufi-hero"><div class="ufi-card"><h1 class="ufi-hero-title">UFI-TOOLS</h1></div><div class="ufi-card"><div class="ufi-login-grid"><label class="ufi-field" id="tokenField"><span>UFI-TOOLS 口令</span><input id="token" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>口令模式</span><select id="tokenMode"><option value="auto">自动判断</option><option value="no_token">无 UFI-TOOLS 口令</option></select></label><label class="ufi-field"><span>某兴后台密码</span><input id="password" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>登录方式</span><select id="loginMethod"><option value="0">登录方式 1</option><option value="1">登录方式 2</option></select></label><div class="ufi-field"><span>口令模式</span><div class="ufi-badge" id="needTokenTag">检测中</div></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="connectBtn">连接后台</button><button class="cbi-button cbi-button-neutral" id="refreshBtn">刷新数据</button></div></div></section><section class="ufi-toolbar"><div class="ufi-card ufi-stat"><div class="ufi-stat-label">设备型号</div><div class="ufi-stat-value" id="sumModel">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">网络类型</div><div class="ufi-stat-value" id="sumNetwork">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">实时速率</div><div class="ufi-stat-value" id="sumSpeed">-</div></div><div class="ufi-card ufi-stat"><div class="ufi-stat-label">连接状态</div><div class="ufi-stat-value" id="statusText">未连接</div><div class="ufi-note" id="statusHint"></div></div></section><section class="ufi-grid"><div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>核心状态</h3></div><div class="ufi-summary-list"><div class="ufi-summary-item"><strong>运营商</strong><span id="sumProvider">-</span></div><div class="ufi-summary-item"><strong>信号</strong><span id="sumSignal">-</span></div><div class="ufi-summary-item"><strong>CPU 温度</strong><span id="sumTemp">-</span></div><div class="ufi-summary-item"><strong>电量</strong><span id="sumBattery">-</span></div><div class="ufi-summary-item"><strong>CPU 占用</strong><span id="sumCpu">-</span></div><div class="ufi-summary-item"><strong>内存占用</strong><span id="sumMem">-</span></div><div class="ufi-summary-item"><strong>WiFi 终端</strong><span id="sumWifi">-</span></div><div class="ufi-summary-item"><strong>ADB 状态</strong><span id="sumAdb">-</span></div></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>流量摘要</h3></div><div class="ufi-kv"><div><span>今日流量</span><strong id="sumDaily">-</strong></div><div><span>本月流量</span><strong id="sumMonthly">-</strong></div></div></div></div><div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>功能入口</h3></div><div class="ufi-function-grid"><button class="ufi-function-btn" data-open-panel="sms">短信面板 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="apn">APN 管理 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="adb">ADB 设置 <span>↗</span></button></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>设备摘要</h3></div><div class="ufi-kv"><div><span>设备型号</span><strong id="sumModel2">-</strong></div><div><span>网络类型</span><strong id="sumNetwork2">-</strong></div><div><span>运营商</span><strong id="sumProvider2">-</strong></div><div><span>连接速率</span><strong id="sumSpeed2">-</strong></div></div></div></div></section></div>'
 		+ '<div class="ufi-modal-wrap" hidden><section class="ufi-panel" data-panel="sms" hidden><div class="ufi-panel-head"><h3>短信收发</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-field"><span>收件号码</span><input id="smsPhone" type="text" placeholder="手机号"></div><div class="ufi-field"><span>短信内容</span><textarea id="smsContent" rows="4" placeholder="输入短信内容"></textarea></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="smsSendBtn">发送短信</button></div><div class="ufi-sms-list" id="smsList"></div></section><section class="ufi-panel" data-panel="apn" hidden><div class="ufi-panel-head"><h3>APN 管理</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-apn-grid"><div class="ufi-apn-side"><div class="ufi-kv"><div><span>当前模式</span><strong id="apnMode">-</strong></div><div><span>当前 APN</span><strong id="apnCurrent">-</strong></div></div><label class="ufi-field"><span>模式切换</span><select id="apnModeSelect"><option value="auto">自动</option><option value="manual">手动</option></select></label><label class="ufi-field"><span>配置列表</span><select id="apnProfileSelect"></select></label><div class="ufi-actions"><button class="cbi-button cbi-button-neutral" id="apnLoadBtn">载入配置</button><button class="cbi-button cbi-button-action" id="apnApplyBtn">应用模式</button></div></div><div class="ufi-stack"><div class="ufi-field"><span>配置名称</span><input id="apnProfileName" type="text"></div><div class="ufi-field"><span>APN</span><input id="apnName" type="text"></div><div class="ufi-field"><span>用户名</span><input id="apnUsername" type="text"></div><div class="ufi-field"><span>密码</span><input id="apnPassword" type="text"></div><div class="ufi-login-grid"><label class="ufi-field"><span>鉴权方式</span><select id="apnAuth"><option value="none">NONE</option><option value="chap">CHAP</option><option value="pap">PAP</option></select></label><label class="ufi-field"><span>PDP 类型</span><select id="apnPdp"><option value="IP">IPv4</option><option value="IPv6">IPv6</option><option value="IPv4v6">IPv4v6</option></select></label></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="apnSaveBtn">保存配置</button><button class="cbi-button cbi-button-remove" id="apnDeleteBtn">删除配置</button></div></div></div></section><section class="ufi-panel" data-panel="adb" hidden><div class="ufi-panel-head"><h3>ADB 设置</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>ADB 就绪</span><strong id="adbAlive">-</strong></div><div><span>USB 调试</span><strong id="adbUsb">-</strong></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="adbUsbBtn">切换 USB 调试</button><button class="cbi-button cbi-button-neutral" id="adbWifiBtn">切换网络 ADB</button></div></section><section class="ufi-panel" data-panel="logs" hidden><div class="ufi-panel-head"><h3 id="logPanelTitle">功能日志</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-card"><div class="ufi-panel-head"><h3>连接日志</h3></div><div class="ufi-log-list" id="logList"></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>功能调用日志</h3></div><div class="ufi-log-list" id="rawLogList"></div></div></section></div><div class="ufi-toast-wrap" id="toast"></div>';
 
+	appendNetworkLockUi(root);
 	rootEl = root;
 	collectEls();
 	els.sumModel2 = root.querySelector('#sumModel2');
@@ -1644,9 +2476,11 @@ function renderSkeleton() {
 function renderAll() {
 	renderSummary();
 	renderSms();
+	renderNetworkLock();
 	renderApn();
 	renderAdb();
 	renderLogs();
+	renderRawLogs();
 }
 
 function boot() {

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=49
+PKG_RELEASE:=53
 LUCI_TITLE:=LuCI support for UFI-TOOLS
 LUCI_DEPENDS:=+luci-base
 LUCI_PKGARCH:=all
