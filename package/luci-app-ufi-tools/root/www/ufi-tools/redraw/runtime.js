@@ -81,7 +81,7 @@ var AUTH_TOKEN_KEY = 'ufi_tools_token_hash';
 var TOKEN_MODE_KEY = 'ufi_tools_token_mode';
 var PASSWORD_KEY = 'ufi_tools_backend_pwd';
 var LOGIN_METHOD_KEY = 'ufi_tools_login_method';
-var APP_RELEASE = 'r83';
+var APP_RELEASE = 'r88';
 var NATIVE_FETCH = window.fetch.bind(window);
 var FAST_REFRESH_MS = 1000;
 var REFRESH_MS = 5000;
@@ -301,9 +301,17 @@ function stateFactory() {
 		ufiData: null,
 		simInfo: null,
 		qciInfo: null,
+		pendingSimSlot: '',
+		simSlotDraft: '',
+		bandLockInfo: null,
+		bandLockDraft: null,
+		cellLockInfo: null,
+		selectedCell: null,
+		deviceSettings: null,
 		smsList: [],
 		cellularMode: '',
 		cellularBusy: false,
+		settingsBusy: false,
 		advancedBusy: false,
 		advancedError: false,
 		error: '',

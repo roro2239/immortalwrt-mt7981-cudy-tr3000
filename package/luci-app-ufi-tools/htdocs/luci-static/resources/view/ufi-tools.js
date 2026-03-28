@@ -1,7 +1,7 @@
 'use strict';
 'require view';
 
-var APP_RELEASE = 'r83';
+var APP_RELEASE = 'r88';
 var STANDALONE_SRC = '/ufi-tools/redraw/index.html?v=' + APP_RELEASE;
 
 return view.extend({

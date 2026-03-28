@@ -1,6 +1,6 @@
 /*
 模块职责：
-这里只保留短信、蜂窝开关和高级功能三条业务链。
+这里只保留短信、蜂窝开关、设备设置和高级功能四条业务链。
 插件、旧完整功能列表、网络锁定等已整体移除，避免残留半截入口。
 */
 
@@ -32,6 +32,10 @@ function loadDashboard() {
 		state.ufiData = results[0];
 		state.cellularMode = text(results[1], '');
 		state.simInfo = results[2];
+		if (state.pendingSimSlot && state.simInfo && text(state.simInfo.slot, '').trim() === text(state.pendingSimSlot, '').trim()) {
+			state.pendingSimSlot = '';
+			state.simSlotDraft = '';
+		}
 		return getQciInfo(state.simInfo).catch(function() {
 			return null;
 		});
@@ -53,14 +57,41 @@ function loadRealtimeDashboard() {
 	});
 }
 
+function loadDashboardSnapshot() {
+	return getUFIData().then(function(data) {
+		state.ufiData = Object.assign({}, state.ufiData || {}, data || {});
+		state.error = '';
+		renderSummary();
+		renderCellular();
+	});
+}
+
 function loadCellularPanel() {
 	pushLog('INFO', '开始读取蜂窝状态');
 	return Promise.all([
 		getCellularMode().catch(function() { return ''; }),
-		getSimInfo().catch(function() { return null; })
+		getSimInfo().catch(function() { return null; }),
+		getBandLockInfo().catch(function() {
+			return {
+				lteBands: [],
+				nrBands: []
+			};
+		}),
+		getCellLockInfo().catch(function() {
+			return {
+				neighborCells: [],
+				lockedCells: []
+			};
+		})
 	]).then(function(results) {
 		state.cellularMode = text(results[0], '');
 		state.simInfo = results[1];
+		state.bandLockInfo = results[2];
+		state.cellLockInfo = results[3];
+		if (state.pendingSimSlot && state.simInfo && text(state.simInfo.slot, '').trim() === text(state.pendingSimSlot, '').trim()) {
+			state.pendingSimSlot = '';
+			state.simSlotDraft = '';
+		}
 		return getQciInfo(state.simInfo).catch(function() {
 			return null;
 		});
@@ -68,6 +99,15 @@ function loadCellularPanel() {
 		state.qciInfo = qciInfo;
 		renderCellular();
 		pushLog('INFO', '蜂窝状态已加载');
+	});
+}
+
+function loadSettingsPanel() {
+	pushLog('INFO', '开始读取设备设置');
+	return getDeviceSettings().then(function(settings) {
+		state.deviceSettings = settings;
+		renderSettings();
+		pushLog('INFO', '设备设置已加载');
 	});
 }
 
@@ -86,10 +126,7 @@ function startRefresh() {
 	stopRefresh();
 	state.timer = window.setInterval(function() {
 		if (state.connected)
-			Promise.all([
-				loadDashboard(),
-				loadCellularPanel()
-			]).catch(function(err) {
+			loadDashboardSnapshot().catch(function(err) {
 				handleBackgroundDisconnect(err, 'refresh');
 			});
 	}, REFRESH_MS);
@@ -231,7 +268,8 @@ function connectBackend() {
 		return Promise.all([
 			loadDashboard(),
 			loadSms(),
-			loadCellularPanel()
+			loadCellularPanel(),
+			loadSettingsPanel()
 		]);
 	}), CONNECT_TIMEOUT, '连接超时').then(function() {
 		state.autoReconnectPaused = false;
@@ -275,6 +313,163 @@ function setAdvancedResult(message, isError) {
 		els.AD_RESULT.classList.toggle('is-error', !!isError);
 	}
 	renderAdvanced();
+}
+
+function withSettingsAction(label, action) {
+	state.settingsBusy = true;
+	renderSettings();
+
+	return Promise.resolve().then(action).catch(function(err) {
+		showToast(text(err && err.message, label + '失败'), 'error');
+	}).finally(function() {
+		state.settingsBusy = false;
+		renderSettings();
+	});
+}
+
+function isWriteSuccess(res) {
+	return !!(res && (res.__empty || res.result === 'success'));
+}
+
+function syncWifiPasswordVisibility() {
+	var authMode = text(els.settingsWifiAuthMode && els.settingsWifiAuthMode.value, 'OPEN').trim();
+	var isOpen = authMode === 'OPEN';
+
+	if (els.settingsWifiPasswordField)
+		els.settingsWifiPasswordField.style.display = isOpen ? 'none' : '';
+
+	if (els.settingsWifiPassword)
+		els.settingsWifiPassword.disabled = !state.connected || !!state.settingsBusy || isOpen;
+}
+
+function togglePerformanceMode() {
+	var current = !!(state.deviceSettings && state.deviceSettings.performanceMode);
+
+	return withSettingsAction('切换性能模式', function() {
+		return setPerformanceMode(!current).then(function(res) {
+			if (!isWriteSuccess(res))
+				throw new Error(text(res && res.result, '性能模式切换失败'));
+
+			showToast(!current ? '性能模式已开启' : '性能模式已关闭', 'success');
+			return loadSettingsPanel();
+		});
+	});
+}
+
+function toggleRoamingSetting() {
+	var current = !!(state.deviceSettings && state.deviceSettings.roamingEnabled);
+
+	return withSettingsAction('切换网络漫游', function() {
+		return setRoamingSetting(!current).then(function(res) {
+			if (!isWriteSuccess(res))
+				throw new Error(text(res && res.result, '网络漫游切换失败'));
+
+			showToast(!current ? '网络漫游已开启' : '网络漫游已关闭', 'success');
+			return loadSettingsPanel();
+		});
+	});
+}
+
+function toggleIndicatorLight() {
+	var current = !!(state.deviceSettings && state.deviceSettings.indicatorLightEnabled);
+
+	return withSettingsAction('切换指示灯', function() {
+		return setIndicatorLightSetting(!current).then(function(res) {
+			if (!isWriteSuccess(res))
+				throw new Error(text(res && res.result, '指示灯切换失败'));
+
+			showToast(!current ? '指示灯已开启' : '指示灯已关闭', 'success');
+			return loadSettingsPanel();
+		});
+	});
+}
+
+function applyWifiBandChange() {
+	var mode = text(els.settingsWifiBandSelect && els.settingsWifiBandSelect.value, '0').trim();
+
+	return withSettingsAction('切换 WiFi 频段', function() {
+		return setWifiBandMode(mode).then(function(res) {
+			if (!isWriteSuccess(res))
+				throw new Error(text(res && res.result, 'WiFi 频段切换失败'));
+
+			showToast(mode === '0' ? 'WiFi 已关闭' : ('WiFi 已切换到 ' + (mode === 'chip1' ? '2.4G' : '5G')), 'success');
+			return loadSettingsPanel();
+		});
+	});
+}
+
+function saveWifiSettingsAction() {
+	var authMode = text(els.settingsWifiAuthMode && els.settingsWifiAuthMode.value, 'OPEN').trim();
+	var password = text(els.settingsWifiPassword && els.settingsWifiPassword.value, '').trim();
+	var ssid = text(els.settingsWifiSSID && els.settingsWifiSSID.value, '').trim();
+	var maxClients = Number(text(els.settingsWifiMaxClients && els.settingsWifiMaxClients.value, '8').trim());
+	var payload;
+
+	if (!ssid)
+		return Promise.reject(new Error('请输入 WiFi 名称'));
+
+	if (!isFinite(maxClients) || maxClients < 1)
+		return Promise.reject(new Error('最大连接数必须大于 0'));
+
+	if (authMode !== 'OPEN' && password.length < 8)
+		return Promise.reject(new Error('WiFi 密码最短为 8 位'));
+
+	payload = {
+		SSID: ssid,
+		AuthMode: authMode,
+		Password: password,
+		ApMaxStationNumber: String(maxClients),
+		ApBroadcastDisabled: !!(els.settingsWifiBroadcast && els.settingsWifiBroadcast.checked),
+		ChipIndex: text(els.settingsWifiChipIndex && els.settingsWifiChipIndex.value, '0').trim(),
+		AccessPointIndex: text(els.settingsWifiAccessPointIndex && els.settingsWifiAccessPointIndex.value, '0').trim()
+	};
+
+	return withSettingsAction('保存 WiFi 设置', function() {
+		return saveWifiSettings(payload).then(function(res) {
+			if (!isWriteSuccess(res))
+				throw new Error(text(res && res.result, '保存 WiFi 设置失败'));
+
+			showToast('WiFi 设置已保存，请重新连接 WiFi', 'success');
+			return loadSettingsPanel();
+		});
+	});
+}
+
+function applyScheduleRebootSetting() {
+	var enabled = !!(els.settingsScheduleEnabled && els.settingsScheduleEnabled.checked);
+	var rebootTime = text(els.settingsScheduleTime && els.settingsScheduleTime.value, '').trim();
+
+	if (!/^(0\d|1\d|2[0-3]):[0-5]\d$/.test(rebootTime))
+		return Promise.reject(new Error('请输入正确的重启时间'));
+
+	return withSettingsAction('保存定时重启', function() {
+		return setScheduleRebootSetting(enabled, rebootTime).then(function(res) {
+			if (!isWriteSuccess(res))
+				throw new Error(text(res && res.result, '保存定时重启失败'));
+
+			showToast(enabled ? '定时重启已保存' : '定时重启已关闭', 'success');
+			return loadSettingsPanel();
+		});
+	});
+}
+
+function rebootDeviceAction() {
+	return withSettingsAction('重启设备', function() {
+		return rebootDevice().then(function(res) {
+			if (!isWriteSuccess(res))
+				throw new Error(text(res && res.result, '重启设备失败'));
+
+			state.connected = false;
+			state.cookie = '';
+			state.error = '设备正在重启，稍后自动恢复连接';
+			stopRefresh();
+			stopRealtimeRefresh();
+			stopSmsRefresh();
+			renderAll();
+			showToast('重启指令已发送，稍后自动恢复连接', 'success');
+			scheduleReconnect('device_reboot', 8000);
+		});
+	});
 }
 
 function applyCellularMode() {
@@ -322,8 +517,11 @@ function applySimSlotChange() {
 
 	return setSimSlot(value).then(function(res) {
 		if (res && res.result === 'success') {
+			state.pendingSimSlot = value;
+			state.simSlotDraft = '';
+			renderCellular();
 			showToast('SIM 卡切换指令已发送', 'success');
-			return wait(2500).then(function() {
+			return wait(4500).then(function() {
 				return Promise.all([
 					loadDashboard(),
 					loadCellularPanel()
@@ -333,7 +531,178 @@ function applySimSlotChange() {
 
 		throw new Error(text(res && res.result, 'SIM 卡切换失败'));
 	}).catch(function(err) {
+		state.pendingSimSlot = '';
 		showToast(text(err && err.message, 'SIM 卡切换失败'), 'error');
+	}).finally(function() {
+		state.cellularBusy = false;
+		stopInteractiveLog();
+		renderCellular();
+	});
+}
+
+function collectSelectedBands(type) {
+	return Array.prototype.map.call(rootEl.querySelectorAll('#bandLockForm input[type="checkbox"][data-band-type="' + type + '"]:checked'), function(input) {
+		return text(input.getAttribute('data-band-value'), '').trim();
+	}).filter(Boolean);
+}
+
+function syncBandLockDraftFromDom() {
+	state.bandLockDraft = {
+		lteBands: collectSelectedBands('lte'),
+		nrBands: collectSelectedBands('nr')
+	};
+}
+
+function isBandLockWriteSuccess(res, bands) {
+	var expected = Array.isArray(bands) ? bands : [];
+
+	if (!isWriteSuccess(res))
+		return false;
+
+	return true;
+}
+
+function bounceCellularMode(currentMode) {
+	var fallbackMode;
+	var availableModes = [
+		'WL_AND_5G',
+		'LTE_AND_5G',
+		'Only_5G',
+		'WCDMA_AND_LTE',
+		'Only_LTE',
+		'Only_WCDMA'
+	];
+
+	if (!currentMode)
+		return Promise.resolve();
+
+	fallbackMode = availableModes.find(function(mode) {
+		return mode !== currentMode;
+	});
+
+	if (!fallbackMode)
+		return setCellularMode(currentMode).catch(function() {
+			return null;
+		}).then(function() {
+			return wait(1200);
+		});
+
+	return setCellularMode(fallbackMode).catch(function() {
+		return null;
+	}).then(function() {
+		return wait(800);
+	}).then(function() {
+		return setCellularMode(currentMode).catch(function() {
+			return null;
+		});
+	}).then(function() {
+		return wait(1200);
+	});
+}
+
+function applyBandLock() {
+	var lteBands = collectSelectedBands('lte');
+	var nrBands = collectSelectedBands('nr');
+	var currentMode = text(state.cellularMode, '').trim();
+
+	if (!lteBands.length && !nrBands.length)
+		return unlockBandLock();
+
+	startInteractiveLog('锁频段日志');
+	state.cellularBusy = true;
+	renderCellular();
+
+	return Promise.all([
+		setLteBandLock(lteBands),
+		setNrBandLock(nrBands)
+	]).then(function(results) {
+		if (!isBandLockWriteSuccess(results[0], lteBands) || !isBandLockWriteSuccess(results[1], nrBands))
+			throw new Error('锁频段失败');
+
+		state.bandLockDraft = null;
+		return bounceCellularMode(currentMode);
+	}).then(function() {
+		showToast('锁频段已应用', 'success');
+		return loadCellularPanel();
+	}).catch(function(err) {
+		showToast(text(err && err.message, '锁频段失败'), 'error');
+	}).finally(function() {
+		state.cellularBusy = false;
+		stopInteractiveLog();
+		renderCellular();
+	});
+}
+
+function unlockBandLock() {
+	startInteractiveLog('解除锁频段日志');
+	state.cellularBusy = true;
+	renderCellular();
+
+	return Promise.all([
+		setLteBandLock([]),
+		setNrBandLock([])
+	]).then(function(results) {
+		if (!isWriteSuccess(results[0]) || !isWriteSuccess(results[1]))
+			throw new Error('解除锁频段失败');
+
+		state.bandLockDraft = null;
+		return bounceCellularMode(text(state.cellularMode, '').trim()).then(function() {
+			showToast('已解除锁频段', 'success');
+			return loadCellularPanel();
+		});
+	}).catch(function(err) {
+		showToast(text(err && err.message, '解除锁频段失败'), 'error');
+	}).finally(function() {
+		state.cellularBusy = false;
+		stopInteractiveLog();
+		renderCellular();
+	});
+}
+
+function applyCellLock() {
+	var pci = text(els.cellularLockPci && els.cellularLockPci.value, '').trim();
+	var earfcn = text(els.cellularLockEarfcn && els.cellularLockEarfcn.value, '').trim();
+	var rat = text(els.cellularLockRat && els.cellularLockRat.value, '').trim();
+
+	if (!pci || !earfcn) {
+		showToast('请填写 PCI 和频率', 'error');
+		return Promise.resolve();
+	}
+
+	startInteractiveLog('锁基站日志');
+	state.cellularBusy = true;
+	renderCellular();
+
+	return lockCell(pci, earfcn, rat).then(function(res) {
+		if (!isWriteSuccess(res))
+			throw new Error(text(res && res.result, '锁基站失败'));
+
+		showToast('锁基站已应用', 'success');
+		state.selectedCell = null;
+		return loadCellularPanel();
+	}).catch(function(err) {
+		showToast(text(err && err.message, '锁基站失败'), 'error');
+	}).finally(function() {
+		state.cellularBusy = false;
+		stopInteractiveLog();
+		renderCellular();
+	});
+}
+
+function unlockCellLockAction() {
+	startInteractiveLog('解除锁基站日志');
+	state.cellularBusy = true;
+	renderCellular();
+
+	return unlockAllCell().then(function(res) {
+		if (!isWriteSuccess(res))
+			throw new Error(text(res && res.result, '解除锁定基站失败'));
+
+		state.selectedCell = null;
+		showToast('已解除锁定基站', 'success');
+		return loadCellularPanel();
+	}).catch(function(err) {
+		showToast(text(err && err.message, '解除锁定基站失败'), 'error');
 	}).finally(function() {
 		state.cellularBusy = false;
 		stopInteractiveLog();
@@ -419,7 +788,8 @@ function bindEvents() {
 		Promise.all([
 			loadDashboard(),
 			loadSms(),
-			loadCellularPanel()
+			loadCellularPanel(),
+			loadSettingsPanel()
 		]).then(function() {
 			showToast('数据已刷新', 'success');
 		}).catch(function(err) {
@@ -516,6 +886,129 @@ function bindEvents() {
 		applySimSlotChange();
 	});
 
+	els.cellularSimSelect.addEventListener('change', function() {
+		state.simSlotDraft = text(els.cellularSimSelect && els.cellularSimSelect.value, '').trim();
+	});
+
+	els.cellularBandLockApplyBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+		applyBandLock();
+	});
+
+	els.bandLockForm.addEventListener('change', function(ev) {
+		if (ev.target && ev.target.matches('input[type="checkbox"][data-band-type]'))
+			syncBandLockDraftFromDom();
+	});
+
+	els.cellularBandUnlockBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+		unlockBandLock();
+	});
+
+	els.cellularCellLockBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+		applyCellLock();
+	});
+
+	els.cellularCellUnlockBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+		unlockCellLockAction();
+	});
+
+	els.settingsRefreshBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		loadSettingsPanel().then(function() {
+			showToast('设备设置已刷新', 'success');
+		}).catch(function(err) {
+			showToast(text(err && err.message, '读取设备设置失败'), 'error');
+		});
+	});
+
+	els.settingsPerformanceBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		togglePerformanceMode();
+	});
+
+	els.settingsRoamingBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		toggleRoamingSetting();
+	});
+
+	els.settingsIndicatorBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		toggleIndicatorLight();
+	});
+
+	els.settingsWifiBandApplyBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		applyWifiBandChange();
+	});
+
+	els.settingsWifiSaveBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		saveWifiSettingsAction().catch(function(err) {
+			showToast(text(err && err.message, '保存 WiFi 设置失败'), 'error');
+		});
+	});
+
+	els.settingsScheduleApplyBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		applyScheduleRebootSetting().catch(function(err) {
+			showToast(text(err && err.message, '保存定时重启失败'), 'error');
+		});
+	});
+
+	els.settingsRebootBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		rebootDeviceAction();
+	});
+
+	els.settingsWifiAuthMode.addEventListener('change', syncWifiPasswordVisibility);
+
 	els.advDisableLittleCoreBtn.addEventListener('click', function() {
 		if (!state.connected) {
 			showToast('请先连接后台', 'error');
@@ -536,13 +1029,20 @@ function bindEvents() {
 function collectEls() {
 	[
 		'tokenField', 'token', 'tokenMode', 'password', 'loginMethod', 'connectBtn', 'refreshBtn', 'toast', 'needTokenTag',
-		'sumModel', 'sumNetwork', 'sumProvider', 'sumSpeed', 'sumTemp', 'sumCpu', 'sumMem', 'sumBattery', 'sumSignal', 'sumWifi', 'sumMonthly',
+		'sumModel', 'sumNetwork', 'sumProvider', 'sumSpeed', 'sumTemp', 'sumCpu', 'sumMem', 'sumSignal', 'sumWifi', 'sumMonthly',
 		'sumUsedFlow', 'sumDaily', 'sumMonthlyUsed', 'sumRealtimeTime', 'sumTotalTime', 'sumStorage', 'cpuFreqSummary', 'cpuFreqList',
 		'statusText', 'statusHint',
 		'smsThreadList', 'smsPhone', 'smsContent', 'smsSendBtn',
 		'cellularStatus', 'cellularNetwork', 'cellularProvider', 'cellularSignal', 'cellularMode', 'cellularSimCurrent', 'cellularQci',
 		'cellularPower', 'cellularSinr', 'cellularRsrq', 'cellularBand', 'cellularFrequency', 'cellularPci',
 		'cellularModeSelect', 'cellularSimSelect', 'cellularSimHint', 'cellularToggleBtn', 'cellularModeApplyBtn', 'cellularSimApplyBtn', 'cellularRefreshBtn',
+		'bandLockForm', 'cellularBandLockApplyBtn', 'cellularBandUnlockBtn', 'cellularLockedCells', 'cellularNeighborCells',
+		'cellularLockRat', 'cellularLockPci', 'cellularLockEarfcn', 'cellularCellLockBtn', 'cellularCellUnlockBtn',
+		'settingsHint', 'settingsRefreshBtn', 'settingsPerformance', 'settingsPerformanceBtn', 'settingsRoaming', 'settingsRoamingBtn',
+		'settingsIndicator', 'settingsIndicatorBtn', 'settingsSchedule', 'settingsRebootBtn', 'settingsWifiBand', 'settingsWifiBandSelect',
+		'settingsWifiBandApplyBtn', 'settingsWifiAccessPointIndex', 'settingsWifiChipIndex', 'settingsWifiSSID', 'settingsWifiAuthMode',
+		'settingsWifiPasswordField', 'settingsWifiPassword', 'settingsWifiMaxClients', 'settingsWifiBroadcast', 'settingsWifiSaveBtn',
+		'settingsScheduleEnabled', 'settingsScheduleTime', 'settingsScheduleApplyBtn',
 		'advancedStatus', 'advDisableLittleCoreBtn', 'advEnableLittleCoreBtn', 'AD_RESULT'
 	].forEach(function(id) {
 		els[id] = rootEl.querySelector('#' + id);
