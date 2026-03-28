@@ -7,8 +7,9 @@ var AUTH_TOKEN_KEY = 'ufi_tools_token_hash';
 var TOKEN_MODE_KEY = 'ufi_tools_token_mode';
 var PASSWORD_KEY = 'ufi_tools_backend_pwd';
 var LOGIN_METHOD_KEY = 'ufi_tools_login_method';
-var APP_RELEASE = 'r63';
+var APP_RELEASE = 'r68';
 var NATIVE_FETCH = window.fetch.bind(window);
+var FAST_REFRESH_MS = 1000;
 var REFRESH_MS = 5000;
 var DEFAULT_REQUEST_TIMEOUT = 15000;
 var CONNECT_TIMEOUT = 20000;
@@ -243,6 +244,7 @@ function stateFactory() {
 		logSessionTitle: '',
 		interactiveLogActive: false,
 		timer: null,
+		fastTimer: null,
 		smsTimer: null,
 		cellTimer: null,
 		cellRefreshPaused: false
@@ -775,10 +777,13 @@ function login() {
 	});
 }
 
-function logout() {
+function logout(source) {
+	var reason = text(source, 'unknown');
+
 	if (!state.cookie)
 		return Promise.resolve();
 
+	pushLog('INFO', '开始断开后台，来源：' + reason);
 	return processAD(state.cookie).then(function(ad) {
 		var body = new URLSearchParams({
 			goformId: 'LOGOUT',
@@ -798,9 +803,10 @@ function logout() {
 		state.cookie = '';
 		state.connected = false;
 		stopRefresh();
+		stopRealtimeRefresh();
 		stopSmsRefresh();
 		stopCellRefresh();
-		pushLog('INFO', '后台已断开');
+		pushLog('INFO', '后台已断开，来源：' + reason);
 	});
 }
 
@@ -1886,33 +1892,39 @@ function renderNetworkLock() {
 
 function renderSummary() {
 	var data = state.ufiData || {};
-	var usage = state.dataUsage || {};
 	var signal = data.network_signalbar || data.network_rssi || data.rssi || '-';
 	var batteryText = hasText(data.battery_value) ? data.battery_value : (hasText(data.battery_vol_percent) ? data.battery_vol_percent : '');
 	var dailyText = hasText(data.daily_data) ? formatBytes(data.daily_data) : '-';
 	var monthlyTotal = hasText(data.monthly_data) ? formatBytes(data.monthly_data) : formatBytes((Number(data.monthly_tx_bytes) || 0) + (Number(data.monthly_rx_bytes) || 0));
 
 	setSummaryItem('sumModel', data.MODEL || data.model || data.hardware_version || (state.versionInfo && state.versionInfo.model));
-	setSummaryItem('sumNetwork', data.network_type || data.network_information);
-	setSummaryItem('sumProvider', data.network_provider);
-	setSummaryItem('sumSpeed', formatBytes(data.realtime_rx_thrpt) + '/s ↓  ' + formatBytes(data.realtime_tx_thrpt) + '/s ↑');
+	renderRealtimeSummary();
 	setSummaryItem('sumTemp', formatTemp(data.cpu_temp));
 	setSummaryItem('sumCpu', formatPercent(data.cpu_usage));
 	setSummaryItem('sumMem', formatPercent(data.mem_usage));
 	setSummaryItem('sumBattery', hasText(batteryText) ? batteryText + '%' : '-');
-	setSummaryItem('sumSignal', signal);
 	setSummaryItem('sumWifi', data.wifi_access_sta_num);
 	setSummaryItem('sumDaily', dailyText);
 	setSummaryItem('sumMonthly', monthlyTotal);
 	setSummaryItem('sumAdb', state.adbAlive ? '已就绪' : '等待中');
-	setSummaryItem('statusText', state.connected ? '已连接' : '未连接');
-	setSummaryItem('statusHint', state.error || '');
 	els.connectBtn.textContent = state.connected ? '断开后台' : (state.connecting ? '连接中...' : '连接后台');
 	els.connectBtn.disabled = !!state.connecting;
 	els.tokenField.style.display = (state.needToken && state.tokenMode !== 'no_token') ? '' : 'none';
 	els.needTokenTag.textContent = state.tokenMode === 'no_token' ? '无口令模式' : (state.needToken ? '需要口令' : '无需口令');
-	syncExtraSummary();
 	syncPluginGlobals();
+}
+
+function renderRealtimeSummary() {
+	var data = state.ufiData || {};
+	var signal = data.network_signalbar || data.network_rssi || data.rssi || '-';
+
+	setSummaryItem('sumNetwork', data.network_type || data.network_information);
+	setSummaryItem('sumProvider', data.network_provider);
+	setSummaryItem('sumSpeed', formatBytes(data.realtime_rx_thrpt) + '/s ↓  ' + formatBytes(data.realtime_tx_thrpt) + '/s ↑');
+	setSummaryItem('sumSignal', signal);
+	setSummaryItem('statusText', state.connected ? '已连接' : '未连接');
+	setSummaryItem('statusHint', state.error || '');
+	syncExtraSummary();
 }
 
 function renderSms() {
@@ -2059,6 +2071,22 @@ function loadDashboard() {
 	});
 }
 
+function loadRealtimeDashboard() {
+	return getUFIData().then(function(data) {
+		state.ufiData = Object.assign({}, state.ufiData || {}, data || {});
+		state.error = '';
+		renderRealtimeSummary();
+	});
+}
+
+function startRealtimeRefresh() {
+	stopRealtimeRefresh();
+	state.fastTimer = window.setInterval(function() {
+		if (state.connected)
+			loadRealtimeDashboard().catch(function() {});
+	}, FAST_REFRESH_MS);
+}
+
 function startRefresh() {
 	stopRefresh();
 	state.timer = window.setInterval(function() {
@@ -2071,6 +2099,13 @@ function stopRefresh() {
 	if (state.timer) {
 		window.clearInterval(state.timer);
 		state.timer = null;
+	}
+}
+
+function stopRealtimeRefresh() {
+	if (state.fastTimer) {
+		window.clearInterval(state.fastTimer);
+		state.fastTimer = null;
 	}
 }
 
@@ -2117,11 +2152,13 @@ function withTimeout(promise, ms, message) {
 
 function connectBackend() {
 	var job;
+	var phase = 'init';
 
 	startInteractiveLog('连接后台日志');
 	state.connecting = true;
 	state.error = '';
 	pushLog('INFO', '开始连接后台');
+	pushLog('INFO', '当前前端版本：' + APP_RELEASE);
 	renderSummary();
 
 	state.backendPassword = els.password.value.trim();
@@ -2163,29 +2200,39 @@ function connectBackend() {
 	}
 
 	job = withTimeout(Promise.resolve().then(function() {
+		phase = 'login';
+		pushLog('INFO', '连接阶段：登录');
 		return login();
 	}).then(function() {
 		state.connected = true;
-		pushLog('INFO', '登录成功，开始同步数据');
+		pushLog('INFO', '连接阶段完成：登录');
+		phase = 'dashboard';
+		pushLog('INFO', '连接阶段：同步设备数据');
 		return Promise.all([
 			loadDashboard(),
 			loadSms(),
 			loadApn()
 		]);
 	}), CONNECT_TIMEOUT, '连接超时').then(function() {
+		pushLog('INFO', '连接阶段完成：同步设备数据');
+		phase = 'plugin_host';
+		pushLog('INFO', '连接阶段：加载插件宿主');
 		return loadPluginHost(true).catch(function(err) {
 			pushLog('WARN', '后台连接后插件重载失败：' + text(err && err.message, '未知错误'));
 			return null;
 		});
 	}).then(function() {
+		pushLog('INFO', '连接阶段完成：加载插件宿主');
+		phase = 'refresh';
 		pushLog('INFO', '后台连接完成');
 		showToast('后台连接成功', 'success');
+		startRealtimeRefresh();
 		startRefresh();
 	}).catch(function(err) {
 		state.connected = false;
 		state.cookie = '';
 		state.error = text(err.message, '后台连接失败');
-		pushLog('WARN', '后台连接失败：' + state.error);
+		pushLog('WARN', '后台连接失败，阶段=' + phase + '：' + state.error);
 		showToast(state.error, 'error');
 	}).finally(function() {
 		state.connecting = false;
@@ -2197,7 +2244,7 @@ function connectBackend() {
 }
 
 function disconnectBackend() {
-	logout().finally(function() {
+	logout('manual').finally(function() {
 		showToast('后台已断开', 'info');
 		renderSummary();
 	});
@@ -3298,6 +3345,9 @@ function pluginCompatCollapseGen(btnId, collapseId, storName, callback) {
 
 function normalizePluginCompatModalNode(node) {
 	var inner;
+	var widthText;
+	var isWide;
+	var hasFooter;
 
 	if (!node || node.nodeType !== 1 || node.getAttribute('data-ufi-modal-ready') === '1')
 		return node;
@@ -3317,18 +3367,46 @@ function normalizePluginCompatModalNode(node) {
 			node.style.alignItems = 'center';
 			node.style.justifyContent = 'center';
 			node.style.zIndex = '2600';
-			if (!node.style.background)
-				node.style.background = 'rgba(15, 23, 42, 0.35)';
+			node.style.background = 'linear-gradient(180deg,rgba(15,23,42,.44) 0%,rgba(15,23,42,.30) 100%)';
+			node.style.backdropFilter = 'blur(10px)';
+			node.style.opacity = node.style.opacity || '1';
 		}
 
 		inner = node.firstElementChild;
 		if (inner) {
+			widthText = String(inner.getAttribute('style') || '') + ' ' + String(inner.style && inner.style.maxWidth || '') + ' ' + String(inner.style && inner.style.width || '');
+			isWide = /800px|720px|700px|680px|600px/i.test(widthText);
+			hasFooter = !!inner.querySelector('.btn,[data-i18n="close_btn"],button[type="submit"],button[type="button"]');
+
 			inner.classList.add('ufi-plugin-compat-captured-modal-inner');
+			if (isWide)
+				inner.classList.add('is-wide');
+			if (hasFooter)
+				inner.classList.add('has-footer');
+			inner.classList.add('ufi-plugin-compat-captured-modal-card');
+			inner.classList.add('ufi-plugin-compat-ufi-panel');
 			inner.style.position = 'relative';
 			inner.style.margin = '0 auto';
-			inner.style.maxWidth = 'min(720px, calc(100vw - 48px))';
+			inner.style.width = isWide ? 'min(840px, calc(100vw - 48px))' : 'min(560px, calc(100vw - 48px))';
+			inner.style.maxWidth = isWide ? 'min(840px, calc(100vw - 48px))' : 'min(560px, calc(100vw - 48px))';
 			inner.style.maxHeight = 'calc(100vh - 48px)';
 			inner.style.overflow = 'auto';
+			inner.style.display = 'grid';
+			inner.style.gap = '16px';
+			inner.style.padding = '18px';
+			inner.style.borderRadius = '28px';
+			inner.style.border = '1px solid var(--ufi-line)';
+			inner.style.background = '#f8fbfd';
+			inner.style.boxShadow = '0 32px 64px rgba(15,23,42,.25)';
+			inner.style.color = 'var(--ufi-text)';
+			inner.style.opacity = '1';
+			inner.style.left = 'auto';
+			inner.style.top = 'auto';
+			inner.style.right = 'auto';
+			inner.style.bottom = 'auto';
+			inner.style.transform = 'none';
+			inner.style.backdropFilter = 'none';
+			inner.style.boxSizing = 'border-box';
 		}
 	}
 
@@ -4307,7 +4385,8 @@ function createPluginHostSection() {
 		E('section', { 'class': 'ufi-plugin-compat-shell', id: 'pluginCompatRoot', 'data-ufi-plugin-compat': '1' }, [
 			E('div', { 'class': 'ufi-plugin-compat-head' }, [
 				E('strong', {}, '兼容页面区域'),
-				E('span', { id: 'pluginCompatStatus' }, '兼容宿主已就绪')
+				E('span', { id: 'pluginCompatStatus' }, '兼容宿主已就绪'),
+				E('span', { 'class': 'ufi-plugin-compat-build', id: 'pluginCompatBuild' }, 'BUILD ' + APP_RELEASE)
 			]),
 			E('div', { id: 'BG', 'class': 'ufi-plugin-compat-bg' }, [
 				E('div', { id: 'BG_OVERLAY', 'class': 'ufi-plugin-compat-overlay' }, [
@@ -4718,6 +4797,7 @@ function appendPluginUi(root) {
 		+ '.ufi-plugin-compat-shell{margin-top:14px;padding:14px 16px;border-radius:18px;border:1px solid var(--ufi-line);background:linear-gradient(180deg,#fdfefe 0%,#f7fbff 100%);display:grid;gap:12px;}'
 		+ '.ufi-plugin-compat-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}'
 		+ '.ufi-plugin-compat-head span{font-size:12px;color:var(--ufi-muted);}'
+		+ '.ufi-plugin-compat-build{padding:4px 10px;border-radius:999px;background:#e7f7f2;color:#0f766e;border:1px solid #bfe5d8;font-weight:700;letter-spacing:.04em;}'
 		+ '.ufi-plugin-compat-container{display:grid;gap:12px;padding:12px;border:1px solid var(--ufi-line);border-radius:16px;background:#fff;}'
 		+ '.ufi-plugin-compat-bg,.ufi-plugin-compat-overlay{display:grid;gap:12px;}'
 		+ '.ufi-plugin-compat-title{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:0;}'
@@ -4740,8 +4820,21 @@ function appendPluginUi(root) {
 		+ '.ufi-plugin-compat-sms-items{margin:0;padding:0;list-style:none;display:grid;gap:8px;min-height:24px;}'
 		+ '.ufi-plugin-compat-sms-items li{padding:10px 12px;border:1px solid var(--ufi-line);border-radius:12px;background:#fff;}'
 		+ '.ufi-plugin-compat-dialog-shell{display:grid;gap:12px;}'
-		+ '.ufi-plugin-compat-modal{position:fixed;left:0;top:0;right:0;bottom:0;display:none;align-items:center;justify-content:center;padding:24px;background:rgba(15,23,42,.35);z-index:2600;}'
-		+ '.ufi-plugin-compat-modal-inner,.ufi-plugin-compat-captured-modal-inner{display:grid;gap:10px;font-size:13px;color:var(--ufi-muted);width:min(720px,calc(100vw - 48px));max-height:calc(100vh - 48px);overflow:auto;padding:16px;border-radius:16px;border:1px solid var(--ufi-line);background:rgba(255,255,255,.96);box-shadow:0 24px 64px rgba(15,23,42,.2);}'
+		+ '.ufi-plugin-compat-modal{position:fixed;left:0;top:0;right:0;bottom:0;display:none;align-items:flex-end;justify-content:center;padding:24px;background:rgba(15,23,42,.35);z-index:2600;}'
+		+ '.ufi-plugin-compat-modal-inner,.ufi-plugin-compat-captured-modal-inner,.ufi-plugin-compat-captured-modal-card,.ufi-plugin-compat-ufi-panel{display:grid !important;gap:16px;font-size:13px;color:var(--ufi-text);max-height:90vh;overflow:auto;padding:18px;border-radius:28px;border:1px solid var(--ufi-line);background:#f8fbfd !important;box-shadow:0 32px 64px rgba(15,23,42,.25) !important;opacity:1 !important;}'
+		+ '.ufi-plugin-compat-modal-inner.is-wide,.ufi-plugin-compat-captured-modal-inner.is-wide{width:min(840px,calc(100vw - 48px));max-width:min(840px,calc(100vw - 48px));}'
+		+ '.ufi-plugin-compat-modal-inner:not(.is-wide),.ufi-plugin-compat-captured-modal-inner:not(.is-wide){width:min(560px,calc(100vw - 48px));max-width:min(560px,calc(100vw - 48px));}'
+		+ '.ufi-plugin-compat-modal-inner .title,.ufi-plugin-compat-captured-modal-inner .title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0;padding-bottom:14px;border-bottom:1px solid #e6edf2;font-size:22px;font-weight:800;color:var(--ufi-text);}'
+		+ '.ufi-plugin-compat-modal-inner .content,.ufi-plugin-compat-captured-modal-inner .content{display:grid;gap:14px;padding:0;overflow:auto;}'
+		+ '.ufi-plugin-compat-modal-inner .btn,.ufi-plugin-compat-captured-modal-inner .btn{display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;padding-top:14px;border-top:1px solid #e6edf2;}'
+		+ '.ufi-plugin-compat-modal-inner .item,.ufi-plugin-compat-captured-modal-inner .item{margin:0;display:grid;gap:8px;padding:12px 14px;border-radius:18px;background:#fff;border:1px solid #edf2f5;}'
+		+ '.ufi-plugin-compat-modal-inner input,.ufi-plugin-compat-modal-inner select,.ufi-plugin-compat-modal-inner textarea,.ufi-plugin-compat-captured-modal-inner input,.ufi-plugin-compat-captured-modal-inner select,.ufi-plugin-compat-captured-modal-inner textarea{width:100%;box-sizing:border-box;padding:11px 12px;border-radius:14px;border:1px solid var(--ufi-line);background:#fff;color:var(--ufi-text);font:inherit;}'
+		+ '.ufi-plugin-compat-modal-inner button,.ufi-plugin-compat-captured-modal-inner button{border-radius:14px;min-height:40px;padding:9px 16px;}'
+		+ '.ufi-plugin-compat-modal-inner.has-footer,.ufi-plugin-compat-captured-modal-inner.has-footer{padding-bottom:18px;}'
+		+ '.ufi-plugin-compat-dialog-shell .mask .modal,.ufi-plugin-compat-dialog-shell .modal{background:#f8fbfd !important;border:1px solid var(--ufi-line) !important;box-shadow:0 32px 64px rgba(15,23,42,.25) !important;color:var(--ufi-text) !important;border-radius:28px !important;opacity:1 !important;}'
+		+ '.ufi-plugin-compat-dialog-shell .mask .title,.ufi-plugin-compat-dialog-shell .modal .title{color:var(--ufi-text) !important;font-size:22px !important;font-weight:800 !important;}'
+		+ '.ufi-plugin-compat-dialog-shell .mask .btn,.ufi-plugin-compat-dialog-shell .modal .btn{background:none !important;}'
+		+ '.ufi-plugin-compat-dialog-shell .mask p,.ufi-plugin-compat-dialog-shell .mask span,.ufi-plugin-compat-dialog-shell .modal p,.ufi-plugin-compat-dialog-shell .modal span,.ufi-plugin-compat-dialog-shell .modal label{color:inherit;}'
 		+ '.ufi-plugin-compat-captured-modal{display:none;}'
 		+ '.ufi-plugin-compat-result-group{display:grid;gap:8px;}'
 		+ '.ufi-plugin-compat-result{margin:0;padding:12px 14px;border-radius:14px;background:#fff;border:1px solid var(--ufi-line);color:var(--ufi-text);white-space:pre-wrap;word-break:break-word;min-height:44px;}'
@@ -4760,7 +4853,8 @@ function appendPluginUi(root) {
 		+ '.ufi-plugin-section{border:1px dashed var(--ufi-line);border-radius:16px;padding:12px;background:#fbfdff;}'
 		+ '.ufi-plugin-section-title{font-size:13px;font-weight:700;margin-bottom:8px;}'
 		+ '.ufi-plugin-section-body{display:grid;gap:10px;}'
-		+ '@media (max-width:900px){.ufi-plugin-store-bar{grid-template-columns:1fr;}.ufi-plugin-host-meta{grid-template-columns:1fr;}.ufi-plugin-compat-head{align-items:flex-start;}}';
+		+ '@media (max-width:900px){.ufi-plugin-store-bar{grid-template-columns:1fr;}.ufi-plugin-host-meta{grid-template-columns:1fr;}.ufi-plugin-compat-head{align-items:flex-start;}}'
+		+ '@media (max-width:640px){.ufi-plugin-compat-modal{padding:10px;align-items:flex-end;}.ufi-plugin-compat-modal-inner,.ufi-plugin-compat-captured-modal-inner{width:min(100%,calc(100vw - 20px)) !important;max-width:min(100%,calc(100vw - 20px)) !important;max-height:calc(100vh - 20px);padding:16px 14px 14px;border-radius:22px;}.ufi-plugin-compat-modal-inner .title,.ufi-plugin-compat-captured-modal-inner .title{font-size:18px;padding-bottom:12px;}.ufi-plugin-compat-modal-inner .btn,.ufi-plugin-compat-captured-modal-inner .btn{justify-content:stretch;}.ufi-plugin-compat-modal-inner .btn button,.ufi-plugin-compat-captured-modal-inner .btn button{flex:1;}}';
 
 	root.appendChild(style);
 	if (functionGrid)
