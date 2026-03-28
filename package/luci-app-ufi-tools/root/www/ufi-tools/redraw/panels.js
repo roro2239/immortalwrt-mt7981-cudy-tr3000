@@ -74,8 +74,11 @@ function loadCellularPanel() {
 function startRealtimeRefresh() {
 	stopRealtimeRefresh();
 	state.fastTimer = window.setInterval(function() {
-		if (state.connected)
-			loadRealtimeDashboard().catch(function() {});
+		if (state.connected) {
+			loadRealtimeDashboard().catch(function(err) {
+				handleBackgroundDisconnect(err, 'realtime_refresh');
+			});
+		}
 	}, FAST_REFRESH_MS);
 }
 
@@ -86,7 +89,9 @@ function startRefresh() {
 			Promise.all([
 				loadDashboard(),
 				loadCellularPanel()
-			]).catch(function() {});
+			]).catch(function(err) {
+				handleBackgroundDisconnect(err, 'refresh');
+			});
 	}, REFRESH_MS);
 }
 
@@ -120,6 +125,22 @@ function stopSmsRefresh() {
 	}
 }
 
+function handleBackgroundDisconnect(err, source) {
+	if (!state.connected && !state.connecting)
+		return;
+
+	state.connected = false;
+	state.cookie = '';
+	state.error = text(err && err.message, '后台连接已断开');
+	state.lastDisconnectReason = text(source, 'refresh');
+	stopRefresh();
+	stopRealtimeRefresh();
+	stopSmsRefresh();
+	renderAll();
+	showToast('后台连接已断开，正在尝试恢复', 'info');
+	scheduleReconnect(state.lastDisconnectReason, 1200);
+}
+
 function withTimeout(promise, ms, message) {
 	return new Promise(function(resolve, reject) {
 		var done = false;
@@ -150,9 +171,12 @@ function connectBackend() {
 	var job;
 	var phase = 'init';
 
+	clearReconnectTimer();
 	startInteractiveLog('连接后台日志');
 	state.connecting = true;
 	state.error = '';
+	state.autoReconnectPaused = false;
+	state.lastDisconnectReason = '';
 	pushLog('INFO', '开始连接后台');
 	pushLog('INFO', '当前前端版本：' + APP_RELEASE);
 	renderSummary();
@@ -210,6 +234,8 @@ function connectBackend() {
 			loadCellularPanel()
 		]);
 	}), CONNECT_TIMEOUT, '连接超时').then(function() {
+		state.autoReconnectPaused = false;
+		state.lastDisconnectReason = '';
 		pushLog('INFO', '连接阶段完成：同步设备数据');
 		showToast('后台连接成功', 'success');
 		startRealtimeRefresh();
@@ -218,8 +244,11 @@ function connectBackend() {
 		state.connected = false;
 		state.cookie = '';
 		state.error = text(err.message, '后台连接失败');
+		state.lastDisconnectReason = phase;
 		pushLog('WARN', '后台连接失败，阶段=' + phase + '：' + state.error);
 		showToast(state.error, 'error');
+		if (!state.autoReconnectPaused)
+			scheduleReconnect('connect_failed', 1800);
 	}).finally(function() {
 		state.connecting = false;
 		stopInteractiveLog();
@@ -230,6 +259,9 @@ function connectBackend() {
 }
 
 function disconnectBackend() {
+	clearReconnectTimer();
+	state.autoReconnectPaused = true;
+	state.lastDisconnectReason = 'manual';
 	logout('manual').finally(function() {
 		showToast('后台已断开', 'info');
 		renderAll();
@@ -353,53 +385,6 @@ function runAdvancedAction(label, action) {
 	});
 }
 
-function handleDisableFotaAction() {
-	return runAdvancedAction('禁用更新', function() {
-		return checkAdvancedAvailable().then(function(enabled) {
-			if (enabled) {
-				return Promise.all([
-					runRootShellCommand('pm disable com.zte.zdm'),
-					runRootShellCommand('pm uninstall -k --user 0 com.zte.zdm'),
-					runRootShellCommand('pm uninstall -k --user 0 cn.zte.aftersale'),
-					runRootShellCommand('pm uninstall -k --user 0 com.zte.zdmdaemon'),
-					runRootShellCommand('pm uninstall -k --user 0 com.zte.zdmdaemon.install'),
-					runRootShellCommand('pm uninstall -k --user 0 com.zte.analytics'),
-					runRootShellCommand('pm uninstall -k --user 0 com.zte.neopush'),
-					runRootShellCommand('am force-stop com.zte.zdm')
-				]).then(function(results) {
-					var output = results.map(function(item) {
-						return text(item && item.content, '');
-					}).filter(Boolean).join('\n');
-					setAdvancedResult(output || '禁用更新已执行', false);
-					showToast('禁用更新已执行', 'success');
-				});
-			}
-
-			return requestDisableFota().then(function(res) {
-				if (res && !res.error) {
-					setAdvancedResult('已通过后端接口触发禁用更新', false);
-					showToast('禁用更新已执行', 'success');
-					return;
-				}
-
-				throw new Error(text(res && res.error, '禁用更新失败'));
-			});
-		});
-	});
-}
-
-function handleOneClickShellAction() {
-	return runAdvancedAction('一键执行 shell', function() {
-		return requestOneClickShell().then(function(res) {
-			if (res && res.error)
-				throw new Error(text(res.error, '执行失败'));
-
-			setAdvancedResult(text(res && res.result, '已执行 one_click_shell'), false);
-			showToast('shell 已执行', 'success');
-		});
-	});
-}
-
 function handleSwitchLittleCoreAction(flag) {
 	var shell = 'echo ' + (flag ? '1' : '0') + ' > /sys/devices/system/cpu/cpu0/online\n'
 		+ 'echo ' + (flag ? '1' : '0') + ' > /sys/devices/system/cpu/cpu1/online\n'
@@ -413,37 +398,6 @@ function handleSwitchLittleCoreAction(flag) {
 
 			setAdvancedResult(text(result.content, flag ? '小核已开启' : '小核已关闭'), false);
 			showToast(flag ? '小核已开启' : '小核已关闭', 'success');
-		});
-	});
-}
-
-function handleDumpBootAction() {
-	return runAdvancedAction('提取 Boot', function() {
-		return runRootShellCommand('getprop ro.boot.slot_suffix').then(function(slotInfo) {
-			var content = text(slotInfo && slotInfo.content, '').toLowerCase();
-			var ab = content.indexOf('a') >= 0 ? 'a' : 'b';
-			var outFile = 'boot_' + ab + '.img';
-			var outLink = '/api/uploads/' + outFile;
-
-			return runRootShellCommand('mkdir -p /data/data/com.minikano.f50_sms/files/uploads').then(function() {
-				return runRootShellCommand('rm -f /data/data/com.minikano.f50_sms/files/uploads/' + outFile);
-			}).then(function() {
-				return runRootShellCommand('dd if=/dev/block/by-name/boot_' + ab + ' of=/data/data/com.minikano.f50_sms/files/uploads/' + outFile);
-			}).then(function(result) {
-				var a;
-
-				if (!result.success)
-					throw new Error(text(result.content, '提取 Boot 失败'));
-
-				a = document.createElement('a');
-				a.href = outLink;
-				a.download = outFile;
-				document.body.appendChild(a);
-				a.click();
-				a.remove();
-				setAdvancedResult('当前 Boot 槽位：' + ab.toUpperCase() + '\n已开始下载：' + outFile, false);
-				showToast('Boot 已开始下载', 'success');
-			});
 		});
 	});
 }
@@ -562,22 +516,6 @@ function bindEvents() {
 		applySimSlotChange();
 	});
 
-	els.advDisableFotaBtn.addEventListener('click', function() {
-		if (!state.connected) {
-			showToast('请先连接后台', 'error');
-			return;
-		}
-		handleDisableFotaAction();
-	});
-
-	els.advShellBtn.addEventListener('click', function() {
-		if (!state.connected) {
-			showToast('请先连接后台', 'error');
-			return;
-		}
-		handleOneClickShellAction();
-	});
-
 	els.advDisableLittleCoreBtn.addEventListener('click', function() {
 		if (!state.connected) {
 			showToast('请先连接后台', 'error');
@@ -593,14 +531,6 @@ function bindEvents() {
 		}
 		handleSwitchLittleCoreAction(true);
 	});
-
-	els.advDumpBootBtn.addEventListener('click', function() {
-		if (!state.connected) {
-			showToast('请先连接后台', 'error');
-			return;
-		}
-		handleDumpBootAction();
-	});
 }
 
 function collectEls() {
@@ -613,7 +543,7 @@ function collectEls() {
 		'cellularStatus', 'cellularNetwork', 'cellularProvider', 'cellularSignal', 'cellularMode', 'cellularSimCurrent', 'cellularQci',
 		'cellularPower', 'cellularSinr', 'cellularRsrq', 'cellularBand', 'cellularFrequency', 'cellularPci',
 		'cellularModeSelect', 'cellularSimSelect', 'cellularSimHint', 'cellularToggleBtn', 'cellularModeApplyBtn', 'cellularSimApplyBtn', 'cellularRefreshBtn',
-		'advancedStatus', 'advDisableFotaBtn', 'advShellBtn', 'advDisableLittleCoreBtn', 'advEnableLittleCoreBtn', 'advDumpBootBtn', 'AD_RESULT'
+		'advancedStatus', 'advDisableLittleCoreBtn', 'advEnableLittleCoreBtn', 'AD_RESULT'
 	].forEach(function(id) {
 		els[id] = rootEl.querySelector('#' + id);
 	});

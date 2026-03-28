@@ -125,6 +125,48 @@ function formatSimSlot(slot) {
 	return value;
 }
 
+function getSimSlotLabel(simInfo, slot) {
+	var options = simInfo && Array.isArray(simInfo.options) ? simInfo.options : [];
+	var value = text(slot, '').trim();
+	var match = options.find(function(option) {
+		return text(option && option.value, '').trim() === value;
+	});
+
+	if (match && hasText(match.label))
+		return match.label;
+
+	return formatSimSlot(value);
+}
+
+function renderSimOptions(simInfo) {
+	var select = els.cellularSimSelect;
+	var options = simInfo && Array.isArray(simInfo.options) ? simInfo.options : [];
+
+	if (!select)
+		return;
+
+	select.innerHTML = '';
+
+	if (!options.length)
+		options = [{ value: '0', label: 'SIM 1' }, { value: '1', label: 'SIM 2' }];
+
+	options.forEach(function(option) {
+		select.appendChild(E('option', {
+			value: text(option && option.value, '').trim()
+		}, text(option && option.label, text(option && option.value, '-'))));
+	});
+
+	if (hasText(simInfo && simInfo.slot)) {
+		Array.prototype.some.call(select.options, function(option) {
+			if (option.value === simInfo.slot) {
+				select.value = simInfo.slot;
+				return true;
+			}
+			return false;
+		});
+	}
+}
+
 function getSignalDetails(data) {
 	return {
 		power: hasText(data.Z5g_rsrp) ? formatSignalMetric(data.Z5g_rsrp, 'dBm') : formatSignalMetric(data.lte_rsrp, 'dBm'),
@@ -241,14 +283,16 @@ function renderCellular() {
 	var mode = state.cellularMode || '-';
 	var simInfo = state.simInfo || {};
 	var signalDetails = getSignalDetails(data);
-	var simHint = simInfo.dualSimSupport ? '支持双卡切换' : '当前设备未检测到双卡支持';
+	var simHint = Array.isArray(simInfo.options) && simInfo.options.length ? ('可切换：' + simInfo.options.map(function(item) {
+		return text(item && item.label, '');
+	}).filter(Boolean).join(' / ')) : '未读取到卡槽信息';
 
 	setSummaryItem('cellularStatus', connected ? '已连接' : '已断开');
 	setSummaryItem('cellularNetwork', data.network_type || data.network_information);
 	setSummaryItem('cellularProvider', data.network_provider);
 	setSummaryItem('cellularSignal', signal);
 	setSummaryItem('cellularMode', mode);
-	setSummaryItem('cellularSimCurrent', simInfo.dualSimSupport ? formatSimSlot(simInfo.slot) : (hasText(simInfo.slot) ? formatSimSlot(simInfo.slot) + '（单卡）' : '单卡设备'));
+	setSummaryItem('cellularSimCurrent', hasText(simInfo.slot) ? getSimSlotLabel(simInfo, simInfo.slot) : '-');
 	setSummaryItem('cellularQci', state.qciInfo && state.qciInfo.text ? state.qciInfo.text : '-');
 	setSummaryItem('cellularPower', signalDetails.power);
 	setSummaryItem('cellularSinr', signalDetails.sinr);
@@ -261,15 +305,7 @@ function renderCellular() {
 	if (els.cellularModeSelect && state.cellularMode)
 		els.cellularModeSelect.value = state.cellularMode;
 
-	if (els.cellularSimSelect && hasText(simInfo.slot)) {
-		Array.prototype.some.call(els.cellularSimSelect.options, function(option) {
-			if (option.value === simInfo.slot) {
-				els.cellularSimSelect.value = simInfo.slot;
-				return true;
-			}
-			return false;
-		});
-	}
+	renderSimOptions(simInfo);
 
 	if (els.cellularToggleBtn) {
 		els.cellularToggleBtn.textContent = connected ? '断开蜂窝' : '连接蜂窝';
@@ -283,10 +319,10 @@ function renderCellular() {
 		els.cellularRefreshBtn.disabled = !state.connected || !!state.cellularBusy;
 
 	if (els.cellularSimSelect)
-		els.cellularSimSelect.disabled = !state.connected || !!state.cellularBusy || !simInfo.dualSimSupport;
+		els.cellularSimSelect.disabled = !state.connected || !!state.cellularBusy;
 
 	if (els.cellularSimApplyBtn)
-		els.cellularSimApplyBtn.disabled = !state.connected || !!state.cellularBusy || !simInfo.dualSimSupport;
+		els.cellularSimApplyBtn.disabled = !state.connected || !!state.cellularBusy;
 }
 
 function renderAdvanced() {
@@ -296,7 +332,7 @@ function renderAdvanced() {
 		else if (state.advancedBusy)
 			els.advancedStatus.textContent = '高级功能执行中';
 		else
-			els.advancedStatus.textContent = '可执行 root shell、禁用更新、小核切换、提取 Boot';
+			els.advancedStatus.textContent = '仅保留小核切换';
 	}
 
 	if (els.AD_RESULT) {
@@ -370,7 +406,7 @@ function renderSkeleton() {
 		+ '<div class="ufi-modal-wrap" hidden>'
 		+ '<section class="ufi-panel" data-panel="sms" hidden><div class="ufi-panel-head"><h3>短信</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-field"><span>收件号码</span><input id="smsPhone" type="text" placeholder="手机号"></div><div class="ufi-field"><span>短信内容</span><textarea id="smsContent" rows="4" placeholder="输入短信内容"></textarea></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="smsSendBtn">发送短信</button></div><div class="ufi-sms-list" id="smsThreadList"></div></section>'
 		+ '<section class="ufi-panel" data-panel="cellular" hidden><div class="ufi-panel-head"><h3>蜂窝开关</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>连接状态</span><strong id="cellularStatus">-</strong></div><div><span>网络类型</span><strong id="cellularNetwork">-</strong></div><div><span>运营商</span><strong id="cellularProvider">-</strong></div><div><span>信号</span><strong id="cellularSignal">-</strong></div><div><span>当前模式</span><strong id="cellularMode">-</strong></div><div><span>当前 SIM</span><strong id="cellularSimCurrent">-</strong></div><div><span>QCI 信息</span><strong id="cellularQci">-</strong></div><div><span>接收功率</span><strong id="cellularPower">-</strong></div><div><span>SINR</span><strong id="cellularSinr">-</strong></div><div><span>RSRQ</span><strong id="cellularRsrq">-</strong></div><div><span>注册频段</span><strong id="cellularBand">-</strong></div><div><span>频率</span><strong id="cellularFrequency">-</strong></div><div><span>PCI</span><strong id="cellularPci">-</strong></div></div><div class="ufi-login-grid"><label class="ufi-field"><span>网络模式</span><select id="cellularModeSelect"><option value="WL_AND_5G">5G 优先</option><option value="LTE_AND_5G">4G/5G 自动</option><option value="Only_5G">仅 5G</option><option value="WCDMA_AND_LTE">3G/4G 自动</option><option value="Only_LTE">仅 4G</option><option value="Only_WCDMA">仅 3G</option></select></label><label class="ufi-field"><span>SIM 卡槽</span><select id="cellularSimSelect"><option value="0">SIM 1</option><option value="1">SIM 2</option></select></label></div><div class="ufi-note" id="cellularSimHint">-</div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="cellularToggleBtn">切换连接</button><button class="cbi-button cbi-button-neutral" id="cellularModeApplyBtn">应用模式</button><button class="cbi-button cbi-button-neutral" id="cellularSimApplyBtn">切换 SIM</button><button class="cbi-button cbi-button-neutral" id="cellularRefreshBtn">刷新状态</button></div></section>'
-		+ '<section class="ufi-panel" data-panel="advance" hidden><div class="ufi-panel-head"><h3>高级功能</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-note" id="advancedStatus">等待连接后台</div><div class="ufi-advanced-grid"><button class="cbi-button cbi-button-neutral" id="advDisableFotaBtn">禁用更新</button><button class="cbi-button cbi-button-neutral" id="advShellBtn">一键执行 shell</button><button class="cbi-button cbi-button-neutral" id="advDisableLittleCoreBtn">关闭小核</button><button class="cbi-button cbi-button-neutral" id="advEnableLittleCoreBtn">开启小核</button><button class="cbi-button cbi-button-neutral" id="advDumpBootBtn">提取 Boot</button></div><div class="ufi-panel-head" style="margin-top:16px;"><h3 style="font-size:16px;">执行结果</h3></div><p id="AD_RESULT" class="ufi-result">等待执行结果</p></section>'
+		+ '<section class="ufi-panel" data-panel="advance" hidden><div class="ufi-panel-head"><h3>高级功能</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-note" id="advancedStatus">等待连接后台</div><div class="ufi-advanced-grid"><button class="cbi-button cbi-button-neutral" id="advDisableLittleCoreBtn">关闭小核</button><button class="cbi-button cbi-button-neutral" id="advEnableLittleCoreBtn">开启小核</button></div><div class="ufi-panel-head" style="margin-top:16px;"><h3 style="font-size:16px;">执行结果</h3></div><p id="AD_RESULT" class="ufi-result">等待执行结果</p></section>'
 		+ '</div>'
 		+ '<div class="ufi-toast-wrap" id="toast"></div>';
 

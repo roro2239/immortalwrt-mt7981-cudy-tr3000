@@ -4,6 +4,71 @@
 ??????????????????????
 */
 
+function canAutoConnect() {
+	return !!(
+		state.backendPassword &&
+		!state.connecting &&
+		!state.connected &&
+		!state.autoReconnectPaused &&
+		(
+			state.tokenMode === 'no_token' ||
+			!state.needToken ||
+			!!state.tokenHash
+		)
+	);
+}
+
+function scheduleReconnect(reason, delay) {
+	var waitMs = Number(delay) || 1200;
+
+	if (state.autoReconnectPaused || state.connecting || state.connected)
+		return;
+
+	if (state.reconnectTimer)
+		window.clearTimeout(state.reconnectTimer);
+
+	state.lastDisconnectReason = text(reason, 'auto');
+	state.reconnectTimer = window.setTimeout(function() {
+		state.reconnectTimer = null;
+		if (!canAutoConnect())
+			return;
+		connectBackend();
+	}, waitMs);
+}
+
+function clearReconnectTimer() {
+	if (state.reconnectTimer) {
+		window.clearTimeout(state.reconnectTimer);
+		state.reconnectTimer = null;
+	}
+}
+
+function resumeAutoConnect(reason) {
+	if (state.connected || state.connecting)
+		return;
+
+	if (state.autoReconnectPaused && state.lastDisconnectReason !== 'manual')
+		state.autoReconnectPaused = false;
+
+	if (canAutoConnect())
+		scheduleReconnect(reason || 'resume', 200);
+}
+
+function bindResumeEvents() {
+	window.addEventListener('pageshow', function() {
+		resumeAutoConnect('pageshow');
+	});
+
+	window.addEventListener('focus', function() {
+		resumeAutoConnect('focus');
+	});
+
+	document.addEventListener('visibilitychange', function() {
+		if (!document.hidden)
+			resumeAutoConnect('visibilitychange');
+	});
+}
+
 
 function boot() {
 	els.password.value = state.backendPassword;
@@ -18,7 +83,7 @@ function boot() {
 	]).then(function() {
 		pushLog('INFO', '页面初始化完成');
 		renderAll();
-		if (state.backendPassword && (!state.needToken || state.tokenHash))
+		if (canAutoConnect())
 			return connectBackend();
 		return null;
 	}).catch(function(err) {
@@ -46,6 +111,7 @@ function mountStandaloneApp() {
 function bootStandalone() {
 	return ensureScript(CRYPTO_SRC).then(function() {
 		mountStandaloneApp();
+		bindResumeEvents();
 		return boot();
 	});
 }
@@ -56,4 +122,9 @@ if (document.readyState === 'loading') {
 			console.error(err);
 		});
 	}, { once: true });
+}
+else {
+	bootStandalone().catch(function(err) {
+		console.error(err);
+	});
 }

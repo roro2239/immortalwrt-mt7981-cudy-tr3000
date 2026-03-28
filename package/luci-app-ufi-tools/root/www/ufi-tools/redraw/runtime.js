@@ -81,7 +81,7 @@ var AUTH_TOKEN_KEY = 'ufi_tools_token_hash';
 var TOKEN_MODE_KEY = 'ufi_tools_token_mode';
 var PASSWORD_KEY = 'ufi_tools_backend_pwd';
 var LOGIN_METHOD_KEY = 'ufi_tools_login_method';
-var APP_RELEASE = 'r81';
+var APP_RELEASE = 'r83';
 var NATIVE_FETCH = window.fetch.bind(window);
 var FAST_REFRESH_MS = 1000;
 var REFRESH_MS = 5000;
@@ -311,6 +311,9 @@ function stateFactory() {
 		rawLogs: [],
 		logSessionTitle: '',
 		interactiveLogActive: false,
+		autoReconnectPaused: false,
+		lastDisconnectReason: '',
+		reconnectTimer: null,
 		timer: null,
 		fastTimer: null,
 		smsTimer: null

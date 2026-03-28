@@ -358,6 +358,49 @@ function getCellularMode() {
 	});
 }
 
+function buildSimOptions(modelName, slot, dualSimSupport) {
+	var model = text(modelName, '').trim().toUpperCase();
+	var currentSlot = text(slot, '').trim();
+	var enabled = !!dualSimSupport;
+	var options = [];
+	var seen = {};
+
+	function pushOption(value, label) {
+		var key = text(value, '').trim();
+
+		if (!key || seen[key])
+			return;
+
+		seen[key] = true;
+		options.push({
+			value: key,
+			label: label
+		});
+	}
+
+	if (model === 'V50') {
+		pushOption('0', '移动');
+		pushOption('1', '电信');
+		pushOption('2', '联通');
+		pushOption('11', '外置');
+		return options;
+	}
+
+	pushOption('0', 'SIM 1');
+	pushOption('1', 'SIM 2');
+
+	if (enabled || currentSlot === '11')
+		pushOption('11', '外置卡');
+
+	if (currentSlot === '2')
+		pushOption('2', 'SIM 3');
+
+	if (currentSlot === '12')
+		pushOption('12', 'SIM 1');
+
+	return options;
+}
+
 function getSimInfo() {
 	return getData({
 		multi_data: '1',
@@ -365,14 +408,14 @@ function getSimInfo() {
 	}).then(function(res) {
 		var slot = text(res && res.sim_slot, '').trim();
 		var support = text(res && res.dual_sim_support, '').trim();
+		var modelName = text((state.ufiData && (state.ufiData.MODEL || state.ufiData.model || state.ufiData.hardware_version)) || (state.versionInfo && state.versionInfo.model), '').trim();
+		var enabled = support ? support === '1' : !!slot;
 
 		return {
 			slot: slot,
-			dualSimSupport: support ? support === '1' : !!slot,
-			options: [
-				{ value: '0', label: 'SIM 1' },
-				{ value: '1', label: 'SIM 2' }
-			]
+			model: modelName,
+			dualSimSupport: enabled,
+			options: buildSimOptions(modelName, slot, enabled)
 		};
 	});
 }
@@ -488,18 +531,6 @@ function setCellularConnection(enable) {
 		goformId: enable ? 'CONNECT_NETWORK' : 'DISCONNECT_NETWORK'
 	}).then(function(res) {
 		return parseOptionalJsonResponse(res, enable ? '连接蜂窝网络' : '断开蜂窝网络');
-	});
-}
-
-function requestDisableFota() {
-	return requestJson('/disable_fota', {
-		signPath: '/api/disable_fota'
-	});
-}
-
-function requestOneClickShell() {
-	return requestJson('/one_click_shell', {
-		signPath: '/api/one_click_shell'
 	});
 }
 
