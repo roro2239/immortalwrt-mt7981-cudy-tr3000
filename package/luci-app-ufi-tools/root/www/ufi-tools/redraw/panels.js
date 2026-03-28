@@ -26,10 +26,17 @@ function loadDashboard() {
 	pushLog('INFO', '开始读取设备状态');
 	return Promise.all([
 		getUFIData(),
-		getCellularMode().catch(function() { return ''; })
+		getCellularMode().catch(function() { return ''; }),
+		getSimInfo().catch(function() { return null; })
 	]).then(function(results) {
 		state.ufiData = results[0];
 		state.cellularMode = text(results[1], '');
+		state.simInfo = results[2];
+		return getQciInfo(state.simInfo).catch(function() {
+			return null;
+		});
+	}).then(function(qciInfo) {
+		state.qciInfo = qciInfo;
 		state.error = '';
 		renderSummary();
 		renderCellular();
@@ -48,8 +55,17 @@ function loadRealtimeDashboard() {
 
 function loadCellularPanel() {
 	pushLog('INFO', '开始读取蜂窝状态');
-	return getCellularMode().then(function(mode) {
-		state.cellularMode = text(mode, '');
+	return Promise.all([
+		getCellularMode().catch(function() { return ''; }),
+		getSimInfo().catch(function() { return null; })
+	]).then(function(results) {
+		state.cellularMode = text(results[0], '');
+		state.simInfo = results[1];
+		return getQciInfo(state.simInfo).catch(function() {
+			return null;
+		});
+	}).then(function(qciInfo) {
+		state.qciInfo = qciInfo;
 		renderCellular();
 		pushLog('INFO', '蜂窝状态已加载');
 	});
@@ -253,6 +269,39 @@ function applyCellularMode() {
 		throw new Error(text(res && res.result, '蜂窝模式应用失败'));
 	}).catch(function(err) {
 		showToast(text(err && err.message, '蜂窝模式应用失败'), 'error');
+	}).finally(function() {
+		state.cellularBusy = false;
+		stopInteractiveLog();
+		renderCellular();
+	});
+}
+
+function applySimSlotChange() {
+	var value = text(els.cellularSimSelect && els.cellularSimSelect.value, '').trim();
+
+	if (!value) {
+		showToast('请选择 SIM 卡槽', 'error');
+		return Promise.resolve();
+	}
+
+	startInteractiveLog('SIM 切换日志');
+	state.cellularBusy = true;
+	renderCellular();
+
+	return setSimSlot(value).then(function(res) {
+		if (res && res.result === 'success') {
+			showToast('SIM 卡切换指令已发送', 'success');
+			return wait(2500).then(function() {
+				return Promise.all([
+					loadDashboard(),
+					loadCellularPanel()
+				]);
+			});
+		}
+
+		throw new Error(text(res && res.result, 'SIM 卡切换失败'));
+	}).catch(function(err) {
+		showToast(text(err && err.message, 'SIM 卡切换失败'), 'error');
 	}).finally(function() {
 		state.cellularBusy = false;
 		stopInteractiveLog();
@@ -504,6 +553,15 @@ function bindEvents() {
 		applyCellularMode();
 	});
 
+	els.cellularSimApplyBtn.addEventListener('click', function() {
+		if (!state.connected) {
+			showToast('请先连接后台', 'error');
+			return;
+		}
+
+		applySimSlotChange();
+	});
+
 	els.advDisableFotaBtn.addEventListener('click', function() {
 		if (!state.connected) {
 			showToast('请先连接后台', 'error');
@@ -548,10 +606,13 @@ function bindEvents() {
 function collectEls() {
 	[
 		'tokenField', 'token', 'tokenMode', 'password', 'loginMethod', 'connectBtn', 'refreshBtn', 'toast', 'needTokenTag',
-		'sumModel', 'sumNetwork', 'sumProvider', 'sumSpeed', 'sumTemp', 'sumCpu', 'sumMem', 'sumBattery', 'sumSignal', 'sumWifi', 'sumDaily', 'sumMonthly',
-		'statusText', 'statusHint', 'sumModel2', 'sumNetwork2', 'sumProvider2', 'sumSignal2', 'sumSpeed2', 'sumSpeed3',
+		'sumModel', 'sumNetwork', 'sumProvider', 'sumSpeed', 'sumTemp', 'sumCpu', 'sumMem', 'sumBattery', 'sumSignal', 'sumWifi', 'sumMonthly',
+		'sumUsedFlow', 'sumDaily', 'sumMonthlyUsed', 'sumRealtimeTime', 'sumTotalTime', 'sumStorage', 'cpuFreqSummary', 'cpuFreqList',
+		'statusText', 'statusHint',
 		'smsThreadList', 'smsPhone', 'smsContent', 'smsSendBtn',
-		'cellularStatus', 'cellularNetwork', 'cellularProvider', 'cellularSignal', 'cellularMode', 'cellularModeSelect', 'cellularToggleBtn', 'cellularModeApplyBtn', 'cellularRefreshBtn',
+		'cellularStatus', 'cellularNetwork', 'cellularProvider', 'cellularSignal', 'cellularMode', 'cellularSimCurrent', 'cellularQci',
+		'cellularPower', 'cellularSinr', 'cellularRsrq', 'cellularBand', 'cellularFrequency', 'cellularPci',
+		'cellularModeSelect', 'cellularSimSelect', 'cellularSimHint', 'cellularToggleBtn', 'cellularModeApplyBtn', 'cellularSimApplyBtn', 'cellularRefreshBtn',
 		'advancedStatus', 'advDisableFotaBtn', 'advShellBtn', 'advDisableLittleCoreBtn', 'advEnableLittleCoreBtn', 'advDumpBootBtn', 'AD_RESULT'
 	].forEach(function(id) {
 		els[id] = rootEl.querySelector('#' + id);

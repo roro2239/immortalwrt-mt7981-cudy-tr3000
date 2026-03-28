@@ -81,7 +81,7 @@ var AUTH_TOKEN_KEY = 'ufi_tools_token_hash';
 var TOKEN_MODE_KEY = 'ufi_tools_token_mode';
 var PASSWORD_KEY = 'ufi_tools_backend_pwd';
 var LOGIN_METHOD_KEY = 'ufi_tools_login_method';
-var APP_RELEASE = 'r78';
+var APP_RELEASE = 'r81';
 var NATIVE_FETCH = window.fetch.bind(window);
 var FAST_REFRESH_MS = 1000;
 var REFRESH_MS = 5000;
@@ -215,6 +215,44 @@ function formatPercent(raw) {
 	return value.toFixed(0) + '%';
 }
 
+function formatDuration(raw) {
+	var total = Number(raw);
+	var days;
+	var hours;
+	var minutes;
+	var seconds;
+	var parts = [];
+
+	if (!isFinite(total) || total < 0)
+		return '-';
+
+	total = Math.floor(total);
+	days = Math.floor(total / 86400);
+	hours = Math.floor((total % 86400) / 3600);
+	minutes = Math.floor((total % 3600) / 60);
+	seconds = total % 60;
+
+	if (days)
+		parts.push(days + '天');
+	if (hours || parts.length)
+		parts.push(hours + '时');
+	if (minutes || parts.length)
+		parts.push(minutes + '分');
+	if (!parts.length || seconds)
+		parts.push(seconds + '秒');
+
+	return parts.join(' ');
+}
+
+function formatFrequencyMHz(raw) {
+	var value = Number(raw);
+
+	if (!isFinite(value) || value < 0)
+		return '-';
+
+	return value.toFixed(0) + ' MHz';
+}
+
 function parseDateText(raw) {
 	if (!hasText(raw))
 		return '-';
@@ -261,6 +299,8 @@ function stateFactory() {
 		connected: false,
 		connecting: false,
 		ufiData: null,
+		simInfo: null,
+		qciInfo: null,
 		smsList: [],
 		cellularMode: '',
 		cellularBusy: false,

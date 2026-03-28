@@ -4,6 +4,13 @@ permissions:
   contents: read
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/openwrt-sdk-plugin-builder.yml'
+      - 'config/256m.config'
+      - 'package/luci-app-ufi-tools/**'
   workflow_dispatch:
     inputs:
       sdk_version:
@@ -256,9 +263,26 @@ jobs:
           tr -d '\r' < "$GITHUB_WORKSPACE/config/256m.config" > .config
           echo "已载入基础配置: config/256m.config"
 
+          CUSTOM_PKG_DIRS=()
           CUSTOM_PKGS=()
           CUSTOM_FEED_PKGS=()
-          while IFS= read -r pkg_dir; do
+
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            CUSTOM_PKG_DIRS+=("$GITHUB_WORKSPACE/package/luci-app-ufi-tools")
+            echo "当前为 push 自动构建，仅编译 luci-app-ufi-tools"
+          else
+            while IFS= read -r pkg_dir; do
+              CUSTOM_PKG_DIRS+=("${pkg_dir}")
+            done < <(find "$GITHUB_WORKSPACE/package" -mindepth 1 -maxdepth 1 -type d | sort)
+            echo "当前为手动触发，编译 package 目录下全部自定义插件"
+          fi
+
+          for pkg_dir in "${CUSTOM_PKG_DIRS[@]}"; do
+            if [ ! -d "${pkg_dir}" ]; then
+              echo "未找到目标插件目录：${pkg_dir}"
+              exit 1
+            fi
+
             pkg_name="$(basename "${pkg_dir}")"
             CUSTOM_PKGS+=("${pkg_name}")
             rm -rf "package/${pkg_name}"
@@ -305,7 +329,7 @@ jobs:
                 done
               done < <(grep -E '^(LUCI_DEPENDS|DEPENDS|PKG_BUILD_DEPENDS|HOST_BUILD_DEPENDS):=' "package/${pkg_name}/Makefile" || true)
             fi
-          done < <(find "$GITHUB_WORKSPACE/package" -mindepth 1 -maxdepth 1 -type d | sort)
+          done
 
           if [ "${#CUSTOM_PKGS[@]}" -eq 0 ]; then
             echo "未发现自定义插件目录：$GITHUB_WORKSPACE/package"

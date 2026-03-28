@@ -24,12 +24,127 @@ function syncExtraSummary() {
 		els.sumSpeed3.textContent = els.sumSpeed.textContent;
 }
 
+function getCpuFrequencyEntries(data) {
+	var info = data && data.cpuFreqInfo;
+	var keys;
+
+	if (!info || typeof info !== 'object')
+		return [];
+
+	keys = Object.keys(info).filter(function(key) {
+		return /^cpu\d+$/.test(key);
+	}).sort(function(a, b) {
+		return Number(a.slice(3)) - Number(b.slice(3));
+	});
+
+	return keys.map(function(key) {
+		var item = info[key] || {};
+
+		return {
+			name: key.toUpperCase(),
+			cur: Number(item.cur) || 0,
+			max: Number(item.max) || 0
+		};
+	});
+}
+
+function getPrimaryCpuFrequency(data) {
+	var entries = getCpuFrequencyEntries(data);
+	var current = 0;
+
+	entries.forEach(function(item) {
+		if (item.cur > current)
+			current = item.cur;
+	});
+
+	return current ? formatFrequencyMHz(current) : '-';
+}
+
+function renderCpuFrequencyList(data) {
+	var list = els.cpuFreqList;
+	var entries = getCpuFrequencyEntries(data);
+
+	if (!list)
+		return;
+
+	list.innerHTML = '';
+
+	if (!entries.length) {
+		list.appendChild(E('div', { 'class': 'ufi-empty' }, '暂无 CPU 频率数据'));
+		return;
+	}
+
+	entries.forEach(function(item) {
+		list.appendChild(E('div', { 'class': 'ufi-mini-item' }, [
+			E('strong', {}, item.name),
+			E('span', {}, formatFrequencyMHz(item.cur) + (item.max ? ' / ' + formatFrequencyMHz(item.max) : ''))
+		]));
+	});
+}
+
+function formatStorageUsage(used, total) {
+	var usedText = hasText(used) ? formatBytes(used) : '-';
+	var totalText = hasText(total) ? formatBytes(total) : '-';
+
+	if (usedText === '-' && totalText === '-')
+		return '-';
+
+	return usedText + ' / ' + totalText;
+}
+
+function formatSignalMetric(raw, unit) {
+	if (!hasText(raw))
+		return '-';
+
+	return String(raw) + (unit ? ' ' + unit : '');
+}
+
+function formatBand(raw, prefix) {
+	if (!hasText(raw))
+		return '-';
+
+	return prefix + String(raw);
+}
+
+function formatSimSlot(slot) {
+	var value = text(slot, '').trim();
+
+	if (value === '0')
+		return 'SIM 1';
+	if (value === '1')
+		return 'SIM 2';
+	if (value === '2')
+		return 'SIM 3';
+	if (value === '11')
+		return '外置 SIM';
+	if (value === '12')
+		return 'SIM 1';
+	if (!value)
+		return '-';
+
+	return value;
+}
+
+function getSignalDetails(data) {
+	return {
+		power: hasText(data.Z5g_rsrp) ? formatSignalMetric(data.Z5g_rsrp, 'dBm') : formatSignalMetric(data.lte_rsrp, 'dBm'),
+		sinr: hasText(data.Nr_snr) ? formatSignalMetric(data.Nr_snr, 'dB') : formatSignalMetric(data.Lte_snr, 'dB'),
+		rsrq: hasText(data.nr_rsrq) ? formatSignalMetric(data.nr_rsrq, 'dB') : formatSignalMetric(data.lte_rsrq, 'dB'),
+		band: hasText(data.Nr_bands) ? formatBand(data.Nr_bands, 'N') : formatBand(data.Lte_bands, 'B'),
+		frequency: hasText(data.Nr_fcn) ? text(data.Nr_fcn, '-') : text(data.Lte_fcn, '-'),
+		pci: hasText(data.Nr_pci) ? text(data.Nr_pci, '-') : text(data.Lte_pci, '-')
+	};
+}
+
 function renderSummary() {
 	var data = state.ufiData || {};
 	var signal = data.network_signalbar || data.network_rssi || data.rssi || '-';
 	var batteryText = hasText(data.battery_value) ? data.battery_value : (hasText(data.battery_vol_percent) ? data.battery_vol_percent : '');
+	var usedFlow = formatBytes((Number(data.monthly_tx_bytes) || 0) + (Number(data.monthly_rx_bytes) || 0));
 	var dailyText = hasText(data.daily_data) ? formatBytes(data.daily_data) : '-';
-	var monthlyTotal = hasText(data.monthly_data) ? formatBytes(data.monthly_data) : formatBytes((Number(data.monthly_tx_bytes) || 0) + (Number(data.monthly_rx_bytes) || 0));
+	var monthlyTotal = hasText(data.monthly_data) ? formatBytes(data.monthly_data) : usedFlow;
+	var storageText = formatStorageUsage(data.internal_used_storage, data.internal_total_storage);
+	var currentFreq = getPrimaryCpuFrequency(data);
 
 	setSummaryItem('sumModel', data.MODEL || data.model || data.hardware_version || (state.versionInfo && state.versionInfo.model));
 	setSummaryItem('sumNetwork', data.network_type || data.network_information);
@@ -41,10 +156,18 @@ function renderSummary() {
 	setSummaryItem('sumMem', formatPercent(data.mem_usage));
 	setSummaryItem('sumBattery', hasText(batteryText) ? batteryText + '%' : '-');
 	setSummaryItem('sumWifi', data.wifi_access_sta_num);
-	setSummaryItem('sumDaily', dailyText);
 	setSummaryItem('sumMonthly', monthlyTotal);
+	setSummaryItem('sumUsedFlow', usedFlow);
+	setSummaryItem('sumDaily', dailyText);
+	setSummaryItem('sumMonthlyUsed', monthlyTotal);
+	setSummaryItem('sumRealtimeTime', formatDuration(data.realtime_time));
+	setSummaryItem('sumTotalTime', formatDuration(data.monthly_time));
+	setSummaryItem('sumStorage', storageText);
+	setSummaryItem('cpuFreqSummary', currentFreq);
 	setSummaryItem('statusText', state.connected ? '已连接' : '未连接');
 	setSummaryItem('statusHint', state.error || '');
+
+	renderCpuFrequencyList(data);
 
 	if (els.connectBtn) {
 		els.connectBtn.textContent = state.connected ? '断开后台' : (state.connecting ? '连接中...' : '连接后台');
@@ -116,15 +239,37 @@ function renderCellular() {
 	var connected = String(data.ppp_status) !== 'ppp_disconnected';
 	var signal = data.network_signalbar || data.network_rssi || data.rssi || '-';
 	var mode = state.cellularMode || '-';
+	var simInfo = state.simInfo || {};
+	var signalDetails = getSignalDetails(data);
+	var simHint = simInfo.dualSimSupport ? '支持双卡切换' : '当前设备未检测到双卡支持';
 
 	setSummaryItem('cellularStatus', connected ? '已连接' : '已断开');
 	setSummaryItem('cellularNetwork', data.network_type || data.network_information);
 	setSummaryItem('cellularProvider', data.network_provider);
 	setSummaryItem('cellularSignal', signal);
 	setSummaryItem('cellularMode', mode);
+	setSummaryItem('cellularSimCurrent', simInfo.dualSimSupport ? formatSimSlot(simInfo.slot) : (hasText(simInfo.slot) ? formatSimSlot(simInfo.slot) + '（单卡）' : '单卡设备'));
+	setSummaryItem('cellularQci', state.qciInfo && state.qciInfo.text ? state.qciInfo.text : '-');
+	setSummaryItem('cellularPower', signalDetails.power);
+	setSummaryItem('cellularSinr', signalDetails.sinr);
+	setSummaryItem('cellularRsrq', signalDetails.rsrq);
+	setSummaryItem('cellularBand', signalDetails.band);
+	setSummaryItem('cellularFrequency', signalDetails.frequency);
+	setSummaryItem('cellularPci', signalDetails.pci);
+	setSummaryItem('cellularSimHint', simHint);
 
 	if (els.cellularModeSelect && state.cellularMode)
 		els.cellularModeSelect.value = state.cellularMode;
+
+	if (els.cellularSimSelect && hasText(simInfo.slot)) {
+		Array.prototype.some.call(els.cellularSimSelect.options, function(option) {
+			if (option.value === simInfo.slot) {
+				els.cellularSimSelect.value = simInfo.slot;
+				return true;
+			}
+			return false;
+		});
+	}
 
 	if (els.cellularToggleBtn) {
 		els.cellularToggleBtn.textContent = connected ? '断开蜂窝' : '连接蜂窝';
@@ -136,6 +281,12 @@ function renderCellular() {
 
 	if (els.cellularRefreshBtn)
 		els.cellularRefreshBtn.disabled = !state.connected || !!state.cellularBusy;
+
+	if (els.cellularSimSelect)
+		els.cellularSimSelect.disabled = !state.connected || !!state.cellularBusy || !simInfo.dualSimSupport;
+
+	if (els.cellularSimApplyBtn)
+		els.cellularSimApplyBtn.disabled = !state.connected || !!state.cellularBusy || !simInfo.dualSimSupport;
 }
 
 function renderAdvanced() {
@@ -175,7 +326,7 @@ function renderSkeleton() {
 		+ '.ufi-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;margin-bottom:16px;}.ufi-stack{display:grid;gap:16px;}'
 		+ '.ufi-summary-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}'
 		+ '.ufi-summary-item{padding:14px;border-radius:18px;background:#f8fbfc;border:1px solid #edf2f5;}'
-		+ '.ufi-summary-item strong{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}.ufi-summary-item span{font-size:16px;font-weight:700;}'
+		+ '.ufi-summary-item strong{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}.ufi-summary-item span{font-size:16px;font-weight:700;line-height:1.4;display:block;}'
 		+ '.ufi-function-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;}'
 		+ '.ufi-function-btn{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid var(--ufi-line);background:#fff;padding:14px 16px;border-radius:18px;font-size:14px;font-weight:700;color:var(--ufi-text);cursor:pointer;min-height:56px;text-align:left;}'
 		+ '.ufi-function-btn:hover{border-color:#b6d5d1;background:#f7fffd;}'
@@ -185,15 +336,20 @@ function renderSkeleton() {
 		+ '.ufi-panel[hidden]{display:none !important;}'
 		+ '.ufi-panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:12px;}.ufi-panel-head h3{margin:0;font-size:22px;}'
 		+ '.ufi-sms-list{display:grid;gap:12px;}.ufi-sms-item{padding:14px 16px;border-radius:18px;background:#fff;border:1px solid var(--ufi-line);}.ufi-sms-item.is-in{border-left:5px solid #0f766e;}.ufi-sms-item.is-out{border-left:5px solid #d97706;}.ufi-sms-head,.ufi-sms-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;}.ufi-sms-body{margin:10px 0 12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;}'
-		+ '.ufi-empty{padding:32px 12px;text-align:center;color:var(--ufi-muted);}'
+		+ '.ufi-empty{padding:20px 12px;text-align:center;color:var(--ufi-muted);}'
 		+ '.ufi-toast-wrap{position:fixed;top:82px;right:18px;display:grid;gap:10px;z-index:3000;}'
 		+ '.ufi-toast{min-width:220px;max-width:360px;color:#fff;padding:12px 14px;border-radius:14px;box-shadow:0 16px 30px rgba(15,23,42,.18);transition:all .28s ease;}.ufi-toast.is-leaving{opacity:0;transform:translateY(-8px);}'
-		+ '.ufi-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}.ufi-kv div{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);}.ufi-kv span{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}.ufi-kv strong{font-size:16px;}'
+		+ '.ufi-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}.ufi-kv div{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);}.ufi-kv span{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}.ufi-kv strong{font-size:16px;display:block;line-height:1.5;word-break:break-word;}'
+		+ '.ufi-mini-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}'
+		+ '.ufi-mini-item{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);}'
+		+ '.ufi-mini-item strong{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}'
+		+ '.ufi-mini-item span{font-size:15px;font-weight:700;display:block;line-height:1.4;}'
+		+ '.ufi-note{margin-top:10px;font-size:12px;color:var(--ufi-muted);line-height:1.6;}'
 		+ '.ufi-advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}'
 		+ '.ufi-result{margin:0;padding:14px 16px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);white-space:pre-wrap;word-break:break-word;min-height:64px;line-height:1.7;}'
 		+ '.ufi-result.is-error{border-color:#ef9a9a;background:#fff7f7;color:#b91c1c;}'
-		+ '@media (max-width:1080px){.ufi-hero,.ufi-grid{grid-template-columns:1fr;}.ufi-toolbar,.ufi-function-grid,.ufi-summary-list,.ufi-advanced-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}'
-		+ '@media (max-width:640px){.ufi-shell{padding:0 10px;}.ufi-toolbar,.ufi-function-grid,.ufi-summary-list,.ufi-kv,.ufi-login-grid,.ufi-advanced-grid{grid-template-columns:1fr;}.ufi-modal-wrap{padding:10px;align-items:flex-end;}.ufi-panel{padding:14px;border-radius:22px;}.ufi-hero-title{font-size:24px;}}'
+		+ '@media (max-width:1080px){.ufi-hero,.ufi-grid{grid-template-columns:1fr;}.ufi-toolbar,.ufi-function-grid,.ufi-summary-list,.ufi-advanced-grid,.ufi-mini-list{grid-template-columns:repeat(2,minmax(0,1fr));}}'
+		+ '@media (max-width:640px){.ufi-shell{padding:0 10px;}.ufi-toolbar,.ufi-function-grid,.ufi-summary-list,.ufi-kv,.ufi-login-grid,.ufi-advanced-grid,.ufi-mini-list{grid-template-columns:1fr;}.ufi-modal-wrap{padding:10px;align-items:flex-end;}.ufi-panel{padding:14px;border-radius:22px;}.ufi-hero-title{font-size:24px;}}'
 		+ '</style>'
 		+ '<div class="ufi-shell">'
 		+ '<section class="ufi-hero">'
@@ -207,13 +363,13 @@ function renderSkeleton() {
 		+ '<div class="ufi-card ufi-stat"><div class="ufi-stat-label">连接状态</div><div class="ufi-stat-value" id="statusText">未连接</div><div class="ufi-note" id="statusHint"></div></div>'
 		+ '</section>'
 		+ '<section class="ufi-grid">'
-		+ '<div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>核心状态</h3></div><div class="ufi-summary-list"><div class="ufi-summary-item"><strong>运营商</strong><span id="sumProvider">-</span></div><div class="ufi-summary-item"><strong>信号</strong><span id="sumSignal">-</span></div><div class="ufi-summary-item"><strong>CPU 温度</strong><span id="sumTemp">-</span></div><div class="ufi-summary-item"><strong>电量</strong><span id="sumBattery">-</span></div><div class="ufi-summary-item"><strong>CPU 占用</strong><span id="sumCpu">-</span></div><div class="ufi-summary-item"><strong>内存占用</strong><span id="sumMem">-</span></div><div class="ufi-summary-item"><strong>WiFi 终端</strong><span id="sumWifi">-</span></div><div class="ufi-summary-item"><strong>本月流量</strong><span id="sumMonthly">-</span></div></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>流量摘要</h3></div><div class="ufi-kv"><div><span>今日流量</span><strong id="sumDaily">-</strong></div><div><span>设备型号</span><strong id="sumModel2">-</strong></div><div><span>网络类型</span><strong id="sumNetwork2">-</strong></div><div><span>连接速率</span><strong id="sumSpeed2">-</strong></div></div></div></div>'
-		+ '<div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>功能入口</h3></div><div class="ufi-function-grid"><button class="ufi-function-btn" data-open-panel="sms">短信 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="cellular">蜂窝开关 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="advance">高级功能 <span>↗</span></button></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>设备摘要</h3></div><div class="ufi-kv"><div><span>运营商</span><strong id="sumProvider2">-</strong></div><div><span>实时信号</span><strong id="sumSignal2">-</strong></div><div><span>实时速率</span><strong id="sumSpeed3">-</strong></div><div><span>构建版本</span><strong>r78</strong></div></div></div></div>'
+		+ '<div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>核心状态</h3></div><div class="ufi-summary-list"><div class="ufi-summary-item"><strong>运营商</strong><span id="sumProvider">-</span></div><div class="ufi-summary-item"><strong>信号</strong><span id="sumSignal">-</span></div><div class="ufi-summary-item"><strong>CPU 温度</strong><span id="sumTemp">-</span></div><div class="ufi-summary-item"><strong>电量</strong><span id="sumBattery">-</span></div><div class="ufi-summary-item"><strong>CPU 占用</strong><span id="sumCpu">-</span></div><div class="ufi-summary-item"><strong>内存占用</strong><span id="sumMem">-</span></div><div class="ufi-summary-item"><strong>WiFi 终端</strong><span id="sumWifi">-</span></div><div class="ufi-summary-item"><strong>本月流量</strong><span id="sumMonthly">-</span></div></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>流量信息</h3></div><div class="ufi-kv"><div><span>已用流量</span><strong id="sumUsedFlow">-</strong></div><div><span>当日流量</span><strong id="sumDaily">-</strong></div><div><span>本月已用</span><strong id="sumMonthlyUsed">-</strong></div><div><span>连接时长</span><strong id="sumRealtimeTime">-</strong></div><div><span>总时长</span><strong id="sumTotalTime">-</strong></div><div><span>内部存储</span><strong id="sumStorage">-</strong></div></div></div></div>'
+		+ '<div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>功能入口</h3></div><div class="ufi-function-grid"><button class="ufi-function-btn" data-open-panel="sms">短信 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="cellular">蜂窝开关 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="advance">高级功能 <span>↗</span></button></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>CPU 频率</h3></div><div class="ufi-kv"><div><span>当前主频</span><strong id="cpuFreqSummary">-</strong></div></div><div class="ufi-mini-list" id="cpuFreqList"></div></div></div>'
 		+ '</section>'
 		+ '</div>'
 		+ '<div class="ufi-modal-wrap" hidden>'
 		+ '<section class="ufi-panel" data-panel="sms" hidden><div class="ufi-panel-head"><h3>短信</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-field"><span>收件号码</span><input id="smsPhone" type="text" placeholder="手机号"></div><div class="ufi-field"><span>短信内容</span><textarea id="smsContent" rows="4" placeholder="输入短信内容"></textarea></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="smsSendBtn">发送短信</button></div><div class="ufi-sms-list" id="smsThreadList"></div></section>'
-		+ '<section class="ufi-panel" data-panel="cellular" hidden><div class="ufi-panel-head"><h3>蜂窝开关</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>连接状态</span><strong id="cellularStatus">-</strong></div><div><span>网络类型</span><strong id="cellularNetwork">-</strong></div><div><span>运营商</span><strong id="cellularProvider">-</strong></div><div><span>信号</span><strong id="cellularSignal">-</strong></div><div><span>当前模式</span><strong id="cellularMode">-</strong></div></div><div class="ufi-login-grid"><label class="ufi-field"><span>网络模式</span><select id="cellularModeSelect"><option value="WL_AND_5G">5G 优先</option><option value="LTE_AND_5G">4G/5G 自动</option><option value="Only_5G">仅 5G</option><option value="WCDMA_AND_LTE">3G/4G 自动</option><option value="Only_LTE">仅 4G</option><option value="Only_WCDMA">仅 3G</option></select></label></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="cellularToggleBtn">切换连接</button><button class="cbi-button cbi-button-neutral" id="cellularModeApplyBtn">应用模式</button><button class="cbi-button cbi-button-neutral" id="cellularRefreshBtn">刷新状态</button></div></section>'
+		+ '<section class="ufi-panel" data-panel="cellular" hidden><div class="ufi-panel-head"><h3>蜂窝开关</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>连接状态</span><strong id="cellularStatus">-</strong></div><div><span>网络类型</span><strong id="cellularNetwork">-</strong></div><div><span>运营商</span><strong id="cellularProvider">-</strong></div><div><span>信号</span><strong id="cellularSignal">-</strong></div><div><span>当前模式</span><strong id="cellularMode">-</strong></div><div><span>当前 SIM</span><strong id="cellularSimCurrent">-</strong></div><div><span>QCI 信息</span><strong id="cellularQci">-</strong></div><div><span>接收功率</span><strong id="cellularPower">-</strong></div><div><span>SINR</span><strong id="cellularSinr">-</strong></div><div><span>RSRQ</span><strong id="cellularRsrq">-</strong></div><div><span>注册频段</span><strong id="cellularBand">-</strong></div><div><span>频率</span><strong id="cellularFrequency">-</strong></div><div><span>PCI</span><strong id="cellularPci">-</strong></div></div><div class="ufi-login-grid"><label class="ufi-field"><span>网络模式</span><select id="cellularModeSelect"><option value="WL_AND_5G">5G 优先</option><option value="LTE_AND_5G">4G/5G 自动</option><option value="Only_5G">仅 5G</option><option value="WCDMA_AND_LTE">3G/4G 自动</option><option value="Only_LTE">仅 4G</option><option value="Only_WCDMA">仅 3G</option></select></label><label class="ufi-field"><span>SIM 卡槽</span><select id="cellularSimSelect"><option value="0">SIM 1</option><option value="1">SIM 2</option></select></label></div><div class="ufi-note" id="cellularSimHint">-</div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="cellularToggleBtn">切换连接</button><button class="cbi-button cbi-button-neutral" id="cellularModeApplyBtn">应用模式</button><button class="cbi-button cbi-button-neutral" id="cellularSimApplyBtn">切换 SIM</button><button class="cbi-button cbi-button-neutral" id="cellularRefreshBtn">刷新状态</button></div></section>'
 		+ '<section class="ufi-panel" data-panel="advance" hidden><div class="ufi-panel-head"><h3>高级功能</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-note" id="advancedStatus">等待连接后台</div><div class="ufi-advanced-grid"><button class="cbi-button cbi-button-neutral" id="advDisableFotaBtn">禁用更新</button><button class="cbi-button cbi-button-neutral" id="advShellBtn">一键执行 shell</button><button class="cbi-button cbi-button-neutral" id="advDisableLittleCoreBtn">关闭小核</button><button class="cbi-button cbi-button-neutral" id="advEnableLittleCoreBtn">开启小核</button><button class="cbi-button cbi-button-neutral" id="advDumpBootBtn">提取 Boot</button></div><div class="ufi-panel-head" style="margin-top:16px;"><h3 style="font-size:16px;">执行结果</h3></div><p id="AD_RESULT" class="ufi-result">等待执行结果</p></section>'
 		+ '</div>'
 		+ '<div class="ufi-toast-wrap" id="toast"></div>';

@@ -358,6 +358,122 @@ function getCellularMode() {
 	});
 }
 
+function getSimInfo() {
+	return getData({
+		multi_data: '1',
+		cmd: 'sim_slot,dual_sim_support'
+	}).then(function(res) {
+		var slot = text(res && res.sim_slot, '').trim();
+		var support = text(res && res.dual_sim_support, '').trim();
+
+		return {
+			slot: slot,
+			dualSimSupport: support ? support === '1' : !!slot,
+			options: [
+				{ value: '0', label: 'SIM 1' },
+				{ value: '1', label: 'SIM 2' }
+			]
+		};
+	});
+}
+
+function setSimSlot(slot) {
+	return postData({
+		goformId: 'SET_SIM_SLOT',
+		sim_slot: text(slot, '').trim()
+	}).then(function(res) {
+		return parseOptionalJsonResponse(res, '切换 SIM 卡');
+	});
+}
+
+function resolveQciSlot(simInfo, modelName) {
+	var rawSlot = text(simInfo && simInfo.slot, '').trim();
+	var dualSimSupport = !!(simInfo && simInfo.dualSimSupport);
+	var model = text(modelName, '').trim().toUpperCase();
+
+	if (!rawSlot && !dualSimSupport)
+		return '0';
+
+	if (rawSlot === '11')
+		return model === 'MU3356' ? '1' : '0';
+
+	if (rawSlot === '12')
+		return '0';
+
+	if (rawSlot === '2')
+		return '1';
+
+	if ((rawSlot === '0' || rawSlot === '1') && model === 'MU3356')
+		return rawSlot === '1' ? '0' : '1';
+
+	if (!rawSlot)
+		return '0';
+
+	return rawSlot;
+}
+
+function parseQciInfo(raw) {
+	var input = text(raw, '').trim();
+	var match;
+	var parts;
+
+	if (!input)
+		return null;
+
+	match = input.match(/\+CGEQOSRDP:\s*(.+?)\s*OK/i);
+	if (!match) {
+		return {
+			text: input,
+			qci: '',
+			downlink: '',
+			uplink: ''
+		};
+	}
+
+	parts = match[1].split(',').map(function(part) {
+		return Number(String(part).trim());
+	});
+
+	if (parts.length < 8) {
+		return {
+			text: input,
+			qci: '',
+			downlink: '',
+			uplink: ''
+		};
+	}
+
+	return {
+		text: 'QCI ' + parts[1] + ' / 下行 ' + (parts[6] / 1000).toFixed(2) + ' Mbps / 上行 ' + (parts[7] / 1000).toFixed(2) + ' Mbps',
+		qci: String(parts[1]),
+		downlink: (parts[6] / 1000).toFixed(2) + ' Mbps',
+		uplink: (parts[7] / 1000).toFixed(2) + ' Mbps'
+	};
+}
+
+function requestAtCommand(command, slot) {
+	var query = new URLSearchParams({
+		command: text(command, '').trim(),
+		slot: text(slot, '0').trim()
+	});
+
+	return requestJson('/AT?' + query.toString(), {
+		signPath: '/api/AT'
+	});
+}
+
+function getQciInfo(simInfo) {
+	var modelName = text((state.ufiData && (state.ufiData.MODEL || state.ufiData.model || state.ufiData.hardware_version)) || (state.versionInfo && state.versionInfo.model), '');
+	var slot = resolveQciSlot(simInfo, modelName);
+
+	return requestAtCommand('AT+CGEQOSRDP=1', slot).then(function(res) {
+		if (res && res.error)
+			throw new Error(text(res.error, '读取 QCI 失败'));
+
+		return parseQciInfo(res && res.result);
+	});
+}
+
 function setCellularMode(mode) {
 	return postData({
 		goformId: 'SET_BEARER_PREFERENCE',
