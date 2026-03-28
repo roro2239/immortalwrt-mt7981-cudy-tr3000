@@ -1,0 +1,12 @@
+{
+  "luci-app-ufi-tools": {
+    "description": "Grant access to UFI-TOOLS standalone view",
+    "read": {
+      "ubus": {
+        "system": [
+          "board"
+        ]
+      }
+    }
+  }
+}

@@ -155,48 +155,6 @@ function renderAdvanced() {
 	}
 }
 
-function renderLogs() {
-	var list = els.logList;
-
-	if (!list)
-		return;
-
-	list.innerHTML = '';
-
-	if (!state.logs.length) {
-		list.appendChild(E('div', { 'class': 'ufi-empty' }, '暂无日志'));
-		return;
-	}
-
-	state.logs.forEach(function(item) {
-		list.appendChild(E('div', { 'class': 'ufi-log-item is-' + item.level.toLowerCase() }, [
-			E('span', { 'class': 'ufi-log-meta' }, '[' + item.time + '] [' + item.level + ']'),
-			E('div', { 'class': 'ufi-log-text' }, item.message)
-		]));
-	});
-}
-
-function renderRawLogs() {
-	var list = els.rawLogList;
-
-	if (!list)
-		return;
-
-	list.innerHTML = '';
-
-	if (!state.rawLogs.length) {
-		list.appendChild(E('div', { 'class': 'ufi-empty' }, '暂无功能调用日志'));
-		return;
-	}
-
-	state.rawLogs.forEach(function(item) {
-		list.appendChild(E('div', { 'class': 'ufi-log-item' }, [
-			E('div', { 'class': 'ufi-log-meta' }, item.time + ' [' + item.status + '] ' + item.action),
-			E('div', { 'class': 'ufi-log-text' }, item.raw || '[EMPTY]')
-		]));
-	});
-}
-
 function renderSkeleton() {
 	var root = E('div', { 'class': 'ufi-redraw-root' });
 
@@ -207,7 +165,6 @@ function renderSkeleton() {
 		+ '.ufi-hero{display:grid;grid-template-columns:1.2fr .9fr;gap:16px;margin-bottom:16px;}'
 		+ '.ufi-card{background:rgba(255,255,255,.92);border:1px solid var(--ufi-line);border-radius:24px;box-shadow:0 18px 50px rgba(23,37,84,.08);padding:18px 20px;backdrop-filter:blur(10px);}'
 		+ '.ufi-hero-title{font-size:28px;font-weight:800;letter-spacing:.02em;margin:0 0 8px;}'
-		+ '.ufi-hero-sub{color:var(--ufi-muted);font-size:14px;line-height:1.7;}'
 		+ '.ufi-badge{display:inline-flex;align-items:center;gap:8px;border-radius:999px;background:var(--ufi-accent-soft);color:var(--ufi-accent);padding:8px 12px;font-size:12px;font-weight:700;}'
 		+ '.ufi-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}'
 		+ '.ufi-field{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--ufi-muted);}'
@@ -232,7 +189,6 @@ function renderSkeleton() {
 		+ '.ufi-toast-wrap{position:fixed;top:82px;right:18px;display:grid;gap:10px;z-index:3000;}'
 		+ '.ufi-toast{min-width:220px;max-width:360px;color:#fff;padding:12px 14px;border-radius:14px;box-shadow:0 16px 30px rgba(15,23,42,.18);transition:all .28s ease;}.ufi-toast.is-leaving{opacity:0;transform:translateY(-8px);}'
 		+ '.ufi-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}.ufi-kv div{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);}.ufi-kv span{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}.ufi-kv strong{font-size:16px;}'
-		+ '.ufi-log-list{display:grid;gap:10px;max-height:280px;overflow:auto;}.ufi-log-item{padding:12px 14px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);}.ufi-log-item.is-warn{border-left:4px solid #d97706;}.ufi-log-item.is-error{border-left:4px solid #b91c1c;}.ufi-log-item.is-info{border-left:4px solid #0f766e;}.ufi-log-meta{display:block;font-size:12px;color:var(--ufi-muted);margin-bottom:8px;}.ufi-log-text{font-size:13px;line-height:1.6;word-break:break-all;}'
 		+ '.ufi-advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}'
 		+ '.ufi-result{margin:0;padding:14px 16px;border-radius:16px;background:#fff;border:1px solid var(--ufi-line);white-space:pre-wrap;word-break:break-word;min-height:64px;line-height:1.7;}'
 		+ '.ufi-result.is-error{border-color:#ef9a9a;background:#fff7f7;color:#b91c1c;}'
@@ -241,7 +197,7 @@ function renderSkeleton() {
 		+ '</style>'
 		+ '<div class="ufi-shell">'
 		+ '<section class="ufi-hero">'
-		+ '<div class="ufi-card"><h1 class="ufi-hero-title">UFI-TOOLS</h1><div class="ufi-hero-sub">已精简为短信、蜂窝开关和高级功能三条完整链路，删除了插件加载与旧完整功能列表。</div></div>'
+		+ '<div class="ufi-card"><h1 class="ufi-hero-title">UFI-TOOLS</h1></div>'
 		+ '<div class="ufi-card"><div class="ufi-login-grid"><label class="ufi-field" id="tokenField"><span>UFI-TOOLS 口令</span><input id="token" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>口令模式</span><select id="tokenMode"><option value="auto">自动判断</option><option value="no_token">无 UFI-TOOLS 口令</option></select></label><label class="ufi-field"><span>某兴后台密码</span><input id="password" type="password" autocomplete="current-password" placeholder=""></label><label class="ufi-field"><span>登录方式</span><select id="loginMethod"><option value="0">登录方式 1</option><option value="1">登录方式 2</option></select></label><div class="ufi-field"><span>口令模式</span><div class="ufi-badge" id="needTokenTag">检测中</div></div></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="connectBtn">连接后台</button><button class="cbi-button cbi-button-neutral" id="refreshBtn">刷新数据</button></div></div>'
 		+ '</section>'
 		+ '<section class="ufi-toolbar">'
@@ -252,14 +208,13 @@ function renderSkeleton() {
 		+ '</section>'
 		+ '<section class="ufi-grid">'
 		+ '<div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>核心状态</h3></div><div class="ufi-summary-list"><div class="ufi-summary-item"><strong>运营商</strong><span id="sumProvider">-</span></div><div class="ufi-summary-item"><strong>信号</strong><span id="sumSignal">-</span></div><div class="ufi-summary-item"><strong>CPU 温度</strong><span id="sumTemp">-</span></div><div class="ufi-summary-item"><strong>电量</strong><span id="sumBattery">-</span></div><div class="ufi-summary-item"><strong>CPU 占用</strong><span id="sumCpu">-</span></div><div class="ufi-summary-item"><strong>内存占用</strong><span id="sumMem">-</span></div><div class="ufi-summary-item"><strong>WiFi 终端</strong><span id="sumWifi">-</span></div><div class="ufi-summary-item"><strong>本月流量</strong><span id="sumMonthly">-</span></div></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>流量摘要</h3></div><div class="ufi-kv"><div><span>今日流量</span><strong id="sumDaily">-</strong></div><div><span>设备型号</span><strong id="sumModel2">-</strong></div><div><span>网络类型</span><strong id="sumNetwork2">-</strong></div><div><span>连接速率</span><strong id="sumSpeed2">-</strong></div></div></div></div>'
-		+ '<div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>功能入口</h3></div><div class="ufi-function-grid"><button class="ufi-function-btn" data-open-panel="sms">短信 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="cellular">蜂窝开关 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="advance">高级功能 <span>↗</span></button></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>设备摘要</h3></div><div class="ufi-kv"><div><span>运营商</span><strong id="sumProvider2">-</strong></div><div><span>实时信号</span><strong id="sumSignal2">-</strong></div><div><span>实时速率</span><strong id="sumSpeed3">-</strong></div><div><span>构建版本</span><strong>r73</strong></div></div></div></div>'
+		+ '<div class="ufi-stack"><div class="ufi-card"><div class="ufi-panel-head"><h3>功能入口</h3></div><div class="ufi-function-grid"><button class="ufi-function-btn" data-open-panel="sms">短信 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="cellular">蜂窝开关 <span>↗</span></button><button class="ufi-function-btn" data-open-panel="advance">高级功能 <span>↗</span></button></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>设备摘要</h3></div><div class="ufi-kv"><div><span>运营商</span><strong id="sumProvider2">-</strong></div><div><span>实时信号</span><strong id="sumSignal2">-</strong></div><div><span>实时速率</span><strong id="sumSpeed3">-</strong></div><div><span>构建版本</span><strong>r78</strong></div></div></div></div>'
 		+ '</section>'
 		+ '</div>'
 		+ '<div class="ufi-modal-wrap" hidden>'
 		+ '<section class="ufi-panel" data-panel="sms" hidden><div class="ufi-panel-head"><h3>短信</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-field"><span>收件号码</span><input id="smsPhone" type="text" placeholder="手机号"></div><div class="ufi-field"><span>短信内容</span><textarea id="smsContent" rows="4" placeholder="输入短信内容"></textarea></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="smsSendBtn">发送短信</button></div><div class="ufi-sms-list" id="smsThreadList"></div></section>'
 		+ '<section class="ufi-panel" data-panel="cellular" hidden><div class="ufi-panel-head"><h3>蜂窝开关</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-kv"><div><span>连接状态</span><strong id="cellularStatus">-</strong></div><div><span>网络类型</span><strong id="cellularNetwork">-</strong></div><div><span>运营商</span><strong id="cellularProvider">-</strong></div><div><span>信号</span><strong id="cellularSignal">-</strong></div><div><span>当前模式</span><strong id="cellularMode">-</strong></div></div><div class="ufi-login-grid"><label class="ufi-field"><span>网络模式</span><select id="cellularModeSelect"><option value="WL_AND_5G">5G 优先</option><option value="LTE_AND_5G">4G/5G 自动</option><option value="Only_5G">仅 5G</option><option value="WCDMA_AND_LTE">3G/4G 自动</option><option value="Only_LTE">仅 4G</option><option value="Only_WCDMA">仅 3G</option></select></label></div><div class="ufi-actions"><button class="cbi-button cbi-button-action" id="cellularToggleBtn">切换连接</button><button class="cbi-button cbi-button-neutral" id="cellularModeApplyBtn">应用模式</button><button class="cbi-button cbi-button-neutral" id="cellularRefreshBtn">刷新状态</button></div></section>'
 		+ '<section class="ufi-panel" data-panel="advance" hidden><div class="ufi-panel-head"><h3>高级功能</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-note" id="advancedStatus">等待连接后台</div><div class="ufi-advanced-grid"><button class="cbi-button cbi-button-neutral" id="advDisableFotaBtn">禁用更新</button><button class="cbi-button cbi-button-neutral" id="advShellBtn">一键执行 shell</button><button class="cbi-button cbi-button-neutral" id="advDisableLittleCoreBtn">关闭小核</button><button class="cbi-button cbi-button-neutral" id="advEnableLittleCoreBtn">开启小核</button><button class="cbi-button cbi-button-neutral" id="advDumpBootBtn">提取 Boot</button></div><div class="ufi-panel-head" style="margin-top:16px;"><h3 style="font-size:16px;">执行结果</h3></div><p id="AD_RESULT" class="ufi-result">等待执行结果</p></section>'
-		+ '<section class="ufi-panel" data-panel="logs" hidden><div class="ufi-panel-head"><h3 id="logPanelTitle">功能日志</h3><button class="cbi-button cbi-button-neutral" data-close-panel="1">关闭</button></div><div class="ufi-card"><div class="ufi-panel-head"><h3>连接日志</h3></div><div class="ufi-log-list" id="logList"></div></div><div class="ufi-card"><div class="ufi-panel-head"><h3>功能调用日志</h3></div><div class="ufi-log-list" id="rawLogList"></div></div></section>'
 		+ '</div>'
 		+ '<div class="ufi-toast-wrap" id="toast"></div>';
 
@@ -274,6 +229,4 @@ function renderAll() {
 	renderSms();
 	renderCellular();
 	renderAdvanced();
-	renderLogs();
-	renderRawLogs();
 }

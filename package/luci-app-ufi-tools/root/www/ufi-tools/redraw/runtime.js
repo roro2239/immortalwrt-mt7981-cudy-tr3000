@@ -1,10 +1,3 @@
-/*
-????????
-??????? DOM ???????????????????????????
-??????????????????????????????
-*/
-
-
 'use strict';
 
 function E(tagName, attrs, children) {
@@ -14,26 +7,32 @@ function E(tagName, attrs, children) {
 	function append(child) {
 		if (child == null || child === false)
 			return;
+
 		if (Array.isArray(child)) {
 			child.forEach(append);
 			return;
 		}
+
 		if (child instanceof Node) {
 			el.appendChild(child);
 			return;
 		}
+
 		el.appendChild(document.createTextNode(String(child)));
 	}
 
 	if (attrs && typeof attrs === 'object' && !Array.isArray(attrs) && !(attrs instanceof Node)) {
 		Object.keys(attrs).forEach(function(key) {
 			var value = attrs[key];
+
 			if (value == null || value === false)
 				return;
+
 			if (key === 'class') {
 				el.className = value;
 				return;
 			}
+
 			if (key === 'style') {
 				if (typeof value === 'string')
 					el.style.cssText = value;
@@ -41,14 +40,17 @@ function E(tagName, attrs, children) {
 					Object.assign(el.style, value);
 				return;
 			}
+
 			if (key.slice(0, 2) === 'on' && typeof value === 'function') {
 				el.addEventListener(key.slice(2), value);
 				return;
 			}
+
 			if (value === true) {
 				el.setAttribute(key, key);
 				return;
 			}
+
 			if (key in el && ['list', 'type', 'id', 'value'].indexOf(key) < 0) {
 				try {
 					el[key] = value;
@@ -56,6 +58,7 @@ function E(tagName, attrs, children) {
 				}
 				catch {}
 			}
+
 			el.setAttribute(key, String(value));
 		});
 	}
@@ -63,14 +66,10 @@ function E(tagName, attrs, children) {
 		children = attrs;
 	}
 
-	if (arguments.length > 2) {
+	if (arguments.length > 2)
 		list = children;
-	}
-	else {
-		if (!attrs || typeof attrs !== 'object' || Array.isArray(attrs) || attrs instanceof Node) {
-			list = attrs;
-		}
-	}
+	else if (!attrs || typeof attrs !== 'object' || Array.isArray(attrs) || attrs instanceof Node)
+		list = attrs;
 
 	append(list);
 	return el;
@@ -82,30 +81,12 @@ var AUTH_TOKEN_KEY = 'ufi_tools_token_hash';
 var TOKEN_MODE_KEY = 'ufi_tools_token_mode';
 var PASSWORD_KEY = 'ufi_tools_backend_pwd';
 var LOGIN_METHOD_KEY = 'ufi_tools_login_method';
-var APP_RELEASE = 'r73';
+var APP_RELEASE = 'r78';
 var NATIVE_FETCH = window.fetch.bind(window);
 var FAST_REFRESH_MS = 1000;
 var REFRESH_MS = 5000;
 var DEFAULT_REQUEST_TIMEOUT = 15000;
 var CONNECT_TIMEOUT = 20000;
-var NETWORK_TYPE_OPTIONS = ['WL_AND_5G', 'LTE_AND_5G', 'Only_5G', 'WCDMA_AND_LTE', 'Only_LTE', 'Only_WCDMA'];
-var BAND_OPTIONS = [
-	{ type: '4G', band: '1', label: 'B1', freq: '2100', mode: 'FDD-LTE', operator: '联通/电信' },
-	{ type: '4G', band: '3', label: 'B3', freq: '1800', mode: 'FDD-LTE', operator: '三大运营商' },
-	{ type: '4G', band: '5', label: 'B5', freq: '850', mode: 'FDD-LTE', operator: '电信' },
-	{ type: '4G', band: '8', label: 'B8', freq: '900', mode: 'FDD-LTE', operator: '移动' },
-	{ type: '4G', band: '34', label: 'B34', freq: '2000', mode: 'TD-LTE', operator: '移动' },
-	{ type: '4G', band: '38', label: 'B38', freq: '2600', mode: 'TD-LTE', operator: '移动' },
-	{ type: '4G', band: '39', label: 'B39', freq: '1900', mode: 'TD-LTE', operator: '移动' },
-	{ type: '4G', band: '40', label: 'B40', freq: '2300', mode: 'TD-LTE', operator: '移动' },
-	{ type: '4G', band: '41', label: 'B41', freq: '2500-2690', mode: 'TD-LTE', operator: '移动' },
-	{ type: '5G', band: '1', label: 'N1', freq: '1920-1980 / 2110-2170', mode: 'FDD', operator: '联通/电信' },
-	{ type: '5G', band: '5', label: 'N5', freq: '824-849 / 869-894', mode: 'FDD', operator: '电信' },
-	{ type: '5G', band: '8', label: 'N8', freq: '880-915 / 925-960', mode: 'FDD', operator: '移动' },
-	{ type: '5G', band: '28', label: 'N28', freq: '703-748 / 758-803', mode: 'FDD', operator: '广电/移动' },
-	{ type: '5G', band: '41', label: 'N41', freq: '2515-2675', mode: 'TDD', operator: '移动' },
-	{ type: '5G', band: '78', label: 'N78', freq: '3300-3600', mode: 'TDD', operator: '联通/电信' }
-];
 
 function ensureScript(src) {
 	if (window.CryptoJS)
@@ -113,19 +94,28 @@ function ensureScript(src) {
 
 	return new Promise(function(resolve, reject) {
 		var existing = document.querySelector('script[data-ufi-script="' + src + '"]');
+		var script;
 
 		if (existing) {
-			existing.addEventListener('load', function() { resolve(); }, { once: true });
-			existing.addEventListener('error', function() { reject(new Error('脚本加载失败：' + src)); }, { once: true });
+			existing.addEventListener('load', function() {
+				resolve();
+			}, { once: true });
+			existing.addEventListener('error', function() {
+				reject(new Error('脚本加载失败：' + src));
+			}, { once: true });
 			return;
 		}
 
-		var script = document.createElement('script');
+		script = document.createElement('script');
 		script.src = src;
 		script.async = true;
 		script.dataset.ufiScript = src;
-		script.onload = function() { resolve(); };
-		script.onerror = function() { reject(new Error('脚本加载失败：' + src)); };
+		script.onload = function() {
+			resolve();
+		};
+		script.onerror = function() {
+			reject(new Error('脚本加载失败：' + src));
+		};
 		document.head.appendChild(script);
 	});
 }
@@ -142,16 +132,21 @@ function hasText(v) {
 }
 
 function decodeBase64(base64String) {
+	var normalized;
+	var padding;
+	var binary;
+	var bytes;
+	var i;
+
 	if (!hasText(base64String))
 		return '';
 
-	var normalized = String(base64String);
-	var padding = normalized.length % 4 === 0 ? 0 : 4 - (normalized.length % 4);
+	normalized = String(base64String);
+	padding = normalized.length % 4 === 0 ? 0 : 4 - (normalized.length % 4);
 	normalized += '='.repeat(padding);
 
-	var binary = window.atob(normalized);
-	var bytes = new Uint8Array(binary.length);
-	var i;
+	binary = window.atob(normalized);
+	bytes = new Uint8Array(binary.length);
 
 	for (i = 0; i < binary.length; i++)
 		bytes[i] = binary.charCodeAt(i);
@@ -227,31 +222,6 @@ function parseDateText(raw) {
 	return String(raw).split(',').slice(0, 6).join('-');
 }
 
-function parseProfiles(apnData) {
-	var profiles = [];
-	var i;
-
-	for (i = 0; i < 20; i++) {
-		if (!hasText(apnData['APN_config' + i]))
-			continue;
-
-		var ipv4 = String(apnData['APN_config' + i]).split('($)');
-		var ipv6 = hasText(apnData['ipv6_APN_config' + i]) ? String(apnData['ipv6_APN_config' + i]).split('($)') : [];
-
-		profiles.push({
-			index: i,
-			name: text(ipv4[0], 'APN-' + i),
-			apn: text(ipv4[1], ''),
-			auth: text(ipv4[4], 'none'),
-			username: text(ipv4[5], ''),
-			password: text(ipv4[6], ''),
-			pdp: text(ipv4[7], text(ipv6[7], 'IPv4v6'))
-		});
-	}
-
-	return profiles;
-}
-
 function hmacSignature(secret, data) {
 	var hmacMd5 = window.CryptoJS.HmacMD5(data, secret);
 	var hmacMd5Bytes = window.CryptoJS.enc.Hex.parse(hmacMd5.toString());
@@ -291,7 +261,6 @@ function stateFactory() {
 		connected: false,
 		connecting: false,
 		ufiData: null,
-		dataUsage: null,
 		smsList: [],
 		cellularMode: '',
 		cellularBusy: false,
@@ -313,10 +282,12 @@ var rootEl = null;
 var els = {};
 
 function pushLog(level, message) {
+	var item;
+
 	if (!state.interactiveLogActive)
 		return;
 
-	var item = {
+	item = {
 		time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
 		level: String(level || 'INFO').toUpperCase(),
 		message: text(message, '')
@@ -325,15 +296,15 @@ function pushLog(level, message) {
 	state.logs.unshift(item);
 	if (state.logs.length > 120)
 		state.logs.length = 120;
-
-	renderLogs();
 }
 
 function pushRawLog(action, status, raw) {
+	var item;
+
 	if (!state.interactiveLogActive)
 		return;
 
-	var item = {
+	item = {
 		time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
 		action: text(action, '-'),
 		status: text(status, '-'),
@@ -343,8 +314,6 @@ function pushRawLog(action, status, raw) {
 	state.rawLogs.unshift(item);
 	if (state.rawLogs.length > 80)
 		state.rawLogs.length = 80;
-
-	renderRawLogs();
 }
 
 function startInteractiveLog(title) {
@@ -354,9 +323,6 @@ function startInteractiveLog(title) {
 	state.interactiveLogActive = true;
 	pushLog('INFO', '当前前端版本：' + APP_RELEASE);
 	pushRawLog('前端版本', 'BUILD', APP_RELEASE);
-	renderLogs();
-	renderRawLogs();
-	openPanel('logs');
 }
 
 function stopInteractiveLog() {

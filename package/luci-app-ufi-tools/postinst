@@ -1,5 +1,6 @@
 #!/bin/sh
 
+[ -f /www/cgi-bin/ufi-tools-proxy ] && sed -i 's/\r$//' /www/cgi-bin/ufi-tools-proxy 2>/dev/null
 [ -x /www/cgi-bin/ufi-tools-proxy ] || chmod 755 /www/cgi-bin/ufi-tools-proxy 2>/dev/null
 
 exit 0

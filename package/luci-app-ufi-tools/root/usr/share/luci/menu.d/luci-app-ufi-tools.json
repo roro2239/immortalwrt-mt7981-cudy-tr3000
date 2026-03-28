@@ -5,6 +5,20 @@
     "action": {
       "type": "view",
       "path": "ufi-tools"
+    },
+    "depends": {
+      "acl": [ "luci-app-ufi-tools" ]
+    }
+  },
+  "admin/status/ufi_tools": {
+    "title": "UFI-TOOLS",
+    "order": 95,
+    "action": {
+      "type": "view",
+      "path": "ufi-tools"
+    },
+    "depends": {
+      "acl": [ "luci-app-ufi-tools" ]
     }
   }
 }

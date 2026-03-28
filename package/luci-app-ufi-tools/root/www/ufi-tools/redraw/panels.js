@@ -26,12 +26,10 @@ function loadDashboard() {
 	pushLog('INFO', '开始读取设备状态');
 	return Promise.all([
 		getUFIData(),
-		getDataUsage().catch(function() { return null; }),
 		getCellularMode().catch(function() { return ''; })
 	]).then(function(results) {
 		state.ufiData = results[0];
-		state.dataUsage = results[1];
-		state.cellularMode = text(results[2], '');
+		state.cellularMode = text(results[1], '');
 		state.error = '';
 		renderSummary();
 		renderCellular();
@@ -554,8 +552,7 @@ function collectEls() {
 		'statusText', 'statusHint', 'sumModel2', 'sumNetwork2', 'sumProvider2', 'sumSignal2', 'sumSpeed2', 'sumSpeed3',
 		'smsThreadList', 'smsPhone', 'smsContent', 'smsSendBtn',
 		'cellularStatus', 'cellularNetwork', 'cellularProvider', 'cellularSignal', 'cellularMode', 'cellularModeSelect', 'cellularToggleBtn', 'cellularModeApplyBtn', 'cellularRefreshBtn',
-		'advancedStatus', 'advDisableFotaBtn', 'advShellBtn', 'advDisableLittleCoreBtn', 'advEnableLittleCoreBtn', 'advDumpBootBtn', 'AD_RESULT',
-		'logPanelTitle', 'logList', 'rawLogList'
+		'advancedStatus', 'advDisableFotaBtn', 'advShellBtn', 'advDisableLittleCoreBtn', 'advEnableLittleCoreBtn', 'advDumpBootBtn', 'AD_RESULT'
 	].forEach(function(id) {
 		els[id] = rootEl.querySelector('#' + id);
 	});
