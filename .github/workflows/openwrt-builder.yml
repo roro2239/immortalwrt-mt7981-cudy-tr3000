@@ -492,6 +492,150 @@ jobs:
 
             printf '%s\n' \
               '#!/bin/sh' \
+              '# 首次启动时注入 USB 共享网络默认接口与防火墙归属。' \
+              'changed=0' \
+              '' \
+              "if ! uci -q get network.usbwan >/dev/null; then" \
+              "  uci -q set network.usbwan='interface'" \
+              '  changed=1' \
+              'fi' \
+              "if [ \"$(uci -q get network.usbwan.proto)\" != 'dhcp' ]; then" \
+              "  uci -q set network.usbwan.proto='dhcp'" \
+              '  changed=1' \
+              'fi' \
+              "if [ \"$(uci -q get network.usbwan.auto)\" != '1' ]; then" \
+              "  uci -q set network.usbwan.auto='1'" \
+              '  changed=1' \
+              'fi' \
+              "if [ \"$(uci -q get network.usbwan.metric)\" != '250' ]; then" \
+              "  uci -q set network.usbwan.metric='250'" \
+              '  changed=1' \
+              'fi' \
+              '' \
+              "if ! uci -q get network.usbwan6 >/dev/null; then" \
+              "  uci -q set network.usbwan6='interface'" \
+              '  changed=1' \
+              'fi' \
+              "if [ \"$(uci -q get network.usbwan6.proto)\" != 'dhcpv6' ]; then" \
+              "  uci -q set network.usbwan6.proto='dhcpv6'" \
+              '  changed=1' \
+              'fi' \
+              "if [ \"$(uci -q get network.usbwan6.device)\" != '@usbwan' ]; then" \
+              "  uci -q set network.usbwan6.device='@usbwan'" \
+              '  changed=1' \
+              'fi' \
+              "if [ \"$(uci -q get network.usbwan6.auto)\" != '1' ]; then" \
+              "  uci -q set network.usbwan6.auto='1'" \
+              '  changed=1' \
+              'fi' \
+              "if [ \"$(uci -q get network.usbwan6.reqaddress)\" != 'try' ]; then" \
+              "  uci -q set network.usbwan6.reqaddress='try'" \
+              '  changed=1' \
+              'fi' \
+              "if [ \"$(uci -q get network.usbwan6.reqprefix)\" != 'auto' ]; then" \
+              "  uci -q set network.usbwan6.reqprefix='auto'" \
+              '  changed=1' \
+              'fi' \
+              '' \
+              "wan_zone=''" \
+              'zone_idx=0' \
+              'while uci -q get firewall.@zone[$zone_idx] >/dev/null; do' \
+              '  if [ "$(uci -q get firewall.@zone[$zone_idx].name)" = "wan" ]; then' \
+              '    wan_zone="@zone[$zone_idx]"' \
+              '    break' \
+              '  fi' \
+              '  zone_idx=$((zone_idx + 1))' \
+              'done' \
+              '' \
+              'if [ -n "$wan_zone" ]; then' \
+              '  current_networks="$(uci -q get firewall.${wan_zone}.network)"' \
+              '  case " $current_networks " in' \
+              '    *" usbwan "*) ;;' \
+              "    *) uci -q add_list firewall.\${wan_zone}.network='usbwan'; changed=1 ;;" \
+              '  esac' \
+              '  case " $current_networks " in' \
+              '    *" usbwan6 "*) ;;' \
+              "    *) uci -q add_list firewall.\${wan_zone}.network='usbwan6'; changed=1 ;;" \
+              '  esac' \
+              'else' \
+              '  logger -t usb-tether-default "skip wan firewall zone: not found"' \
+              'fi' \
+              '' \
+              'if [ "$changed" = "1" ]; then' \
+              '  uci -q commit network' \
+              '  uci -q commit firewall' \
+              'fi' \
+              'rm -f /etc/uci-defaults/101-usb-tethering' \
+              > files/etc/uci-defaults/101-usb-tethering
+            chmod +x files/etc/uci-defaults/101-usb-tethering
+
+            mkdir -p files/etc/hotplug.d/net
+            printf '%s\n' \
+              '#!/bin/sh' \
+              '# USB 共享网络热插拔自动绑定。' \
+              'ACTION_NAME="${ACTION:-}"' \
+              'DEVICE_NAME="${DEVICENAME:-}"' \
+              '' \
+              'case "$ACTION_NAME" in' \
+              '  add|remove) ;;' \
+              '  *) exit 0 ;;' \
+              'esac' \
+              '' \
+              '[ -n "$DEVICE_NAME" ] || exit 0' \
+              '' \
+              'case "$DEVICE_NAME" in' \
+              '  lo|br-*|docker*|ifb*|veth*|wlan*|phy*|ap*) exit 0 ;;' \
+              'esac' \
+              '' \
+              'if [ "$ACTION_NAME" = "remove" ]; then' \
+              '  if [ "$(uci -q get network.usbwan.device)" = "$DEVICE_NAME" ]; then' \
+              '    ifdown usbwan >/dev/null 2>&1 || true' \
+              '    ifdown usbwan6 >/dev/null 2>&1 || true' \
+              '    uci -q delete network.usbwan.device' \
+              '    uci -q commit network' \
+              '    logger -t usb-tether-hotplug "detach device=${DEVICE_NAME}"' \
+              '  fi' \
+              '  exit 0' \
+              'fi' \
+              '' \
+              'SYS_NET_PATH="/sys/class/net/${DEVICE_NAME}"' \
+              '[ -d "$SYS_NET_PATH" ] || exit 0' \
+              'SYS_DEVICE_PATH="$(readlink -f "$SYS_NET_PATH/device" 2>/dev/null || true)"' \
+              'SYS_DRIVER_PATH="$(readlink -f "$SYS_NET_PATH/device/driver" 2>/dev/null || true)"' \
+              'SYS_DRIVER_NAME="$(basename "$SYS_DRIVER_PATH" 2>/dev/null || true)"' \
+              '' \
+              'case "$SYS_DEVICE_PATH" in' \
+              '  *"/usb"*) ;;' \
+              '  *) exit 0 ;;' \
+              'esac' \
+              '' \
+              'case "$SYS_DRIVER_NAME" in' \
+              '  rndis_host|cdc_ether|cdc_ncm|ipheth) ;;' \
+              '  *) exit 0 ;;' \
+              'esac' \
+              '' \
+              'changed=0' \
+              'if [ "$(uci -q get network.usbwan.device)" != "$DEVICE_NAME" ]; then' \
+              '  uci -q set network.usbwan.device="$DEVICE_NAME"' \
+              '  changed=1' \
+              'fi' \
+              'if [ "$(uci -q get network.usbwan.auto)" != "1" ]; then' \
+              "  uci -q set network.usbwan.auto='1'" \
+              '  changed=1' \
+              'fi' \
+              '' \
+              'if [ "$changed" = "1" ]; then' \
+              '  uci -q commit network' \
+              'fi' \
+              '' \
+              'ifup usbwan >/dev/null 2>&1 || true' \
+              '( sleep 2; ifup usbwan6 >/dev/null 2>&1 || true ) &' \
+              'logger -t usb-tether-hotplug "attach device=${DEVICE_NAME} driver=${SYS_DRIVER_NAME}"' \
+              > files/etc/hotplug.d/net/90-usb-tethering
+            chmod +x files/etc/hotplug.d/net/90-usb-tethering
+
+            printf '%s\n' \
+              '#!/bin/sh' \
               '# 首次启动时添加后台别名地址，不修改 LAN 主网段。' \
               "LAN_ALIAS='${LAN_IP}'" \
               'if [ "$LAN_ALIAS" != "$(uci -q get network.lan.ipaddr)" ]; then' \
@@ -504,9 +648,9 @@ jobs:
               "  uci -q set network.lan_admin.peerdns='0'" \
               '  uci -q commit network' \
               'fi' \
-              'rm -f /etc/uci-defaults/101-custom-lan-ip' \
-              > files/etc/uci-defaults/101-custom-lan-ip
-            chmod +x files/etc/uci-defaults/101-custom-lan-ip
+              'rm -f /etc/uci-defaults/102-custom-lan-ip' \
+              > files/etc/uci-defaults/102-custom-lan-ip
+            chmod +x files/etc/uci-defaults/102-custom-lan-ip
 
             ENABLE_PKGS="$TOGGLE_ADD $(normalize_packages "$EXTRA_PACKAGES_INPUT")"
             DISABLE_PKGS="$TOGGLE_REMOVE $(normalize_packages "$REMOVE_PACKAGES_INPUT")"
