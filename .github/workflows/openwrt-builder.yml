@@ -478,6 +478,36 @@ jobs:
               > files/etc/uci-defaults/99-default-opkg-mirror
             chmod +x files/etc/uci-defaults/99-default-opkg-mirror
 
+            mkdir -p files/etc/init.d
+            printf '%s\n' \
+              '#!/bin/sh /etc/rc.common' \
+              'START=19' \
+              '' \
+              'set_usb_power() {' \
+              '  [ -w /sys/class/gpio/modem_power/value ] || return 0' \
+              '  echo 1 > /sys/class/gpio/modem_power/value' \
+              '  logger -t usb-power "modem_power enabled"' \
+              '}' \
+              '' \
+              'boot() {' \
+              '  set_usb_power' \
+              '}' \
+              '' \
+              'start() {' \
+              '  set_usb_power' \
+              '}' \
+              > files/etc/init.d/usb-power
+            chmod +x files/etc/init.d/usb-power
+
+            printf '%s\n' \
+              '#!/bin/sh' \
+              '[ -x /etc/init.d/usb-power ] || exit 0' \
+              '/etc/init.d/usb-power enable >/dev/null 2>&1 || true' \
+              '/etc/init.d/usb-power start >/dev/null 2>&1 || true' \
+              'rm -f /etc/uci-defaults/098-enable-usb-power' \
+              > files/etc/uci-defaults/098-enable-usb-power
+            chmod +x files/etc/uci-defaults/098-enable-usb-power
+
             printf '%s\n' \
               '#!/bin/sh' \
               '# 首次启动时默认开启流量分载，兼容 USB 共享网络接入。' \
@@ -485,6 +515,13 @@ jobs:
               "  uci -q set firewall.@defaults[0].flow_offloading='1'" \
               "  uci -q set firewall.@defaults[0].flow_offloading_hw='1'" \
               '  uci -q commit firewall' \
+              'fi' \
+              "uci -q set network.globals='globals'" \
+              "uci -q set network.globals.packet_steering='1'" \
+              'uci -q commit network' \
+              'if [ -x /etc/init.d/irqbalance ]; then' \
+              '  /etc/init.d/irqbalance enable >/dev/null 2>&1 || true' \
+              '  /etc/init.d/irqbalance start >/dev/null 2>&1 || true' \
               'fi' \
               'rm -f /etc/uci-defaults/100-usb-turboacc' \
               > files/etc/uci-defaults/100-usb-turboacc
@@ -610,9 +647,15 @@ jobs:
               'esac' \
               '' \
               'case "$SYS_DRIVER_NAME" in' \
-              '  rndis_host|cdc_ether|cdc_ncm|ipheth) ;;' \
+              '  rndis_host|cdc_ether|cdc_ncm|cdc_mbim|qmi_wwan|ipheth) ;;' \
               '  *) exit 0 ;;' \
               'esac' \
+              '' \
+              'if command -v ethtool >/dev/null 2>&1; then' \
+              '  for feature in gro gso tso rx tx; do' \
+              '    ethtool -K "$DEVICE_NAME" "$feature" on >/dev/null 2>&1 || true' \
+              '  done' \
+              'fi' \
               '' \
               'changed=0' \
               'if [ "$(uci -q get network.usbwan.device)" != "$DEVICE_NAME" ]; then' \
