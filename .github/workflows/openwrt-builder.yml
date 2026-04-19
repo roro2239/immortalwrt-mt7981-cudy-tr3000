@@ -59,17 +59,17 @@ on:
         description: '是否启用代理（OpenClash）'
         required: false
         type: boolean
-        default: true
+        default: false
       enable_ttyd:
         description: '是否启用终端（ttyd）'
         required: false
         type: boolean
-        default: true
+        default: false
       enable_upnp:
         description: '是否启用 UPnP'
         required: false
         type: boolean
-        default: true
+        default: false
       enable_package_manager:
         description: '是否启用软件包管理'
         required: false
@@ -84,7 +84,7 @@ on:
         description: '是否启用 iStore'
         required: false
         type: boolean
-        default: true
+        default: false
       extra_packages:
         description: '额外安装包（空格/逗号/换行分隔）'
         required: false
@@ -118,12 +118,12 @@ env:
   WIFI_SSID_5G_INPUT: ${{ github.event.inputs.wifi_ssid_5g || github.event.client_payload.wifi_ssid_5g || '' }}
   LAN_IP_INPUT: ${{ github.event.inputs.lan_ip || github.event.client_payload.lan_ip || '10.0.0.1' }}
   ENABLE_USB_POWER_INPUT: ${{ github.event.inputs.enable_usb_power || github.event.client_payload.enable_usb_power || 'true' }}
-  ENABLE_PROXY_INPUT: ${{ github.event.inputs.enable_proxy || 'true' }}
-  ENABLE_TTYD_INPUT: ${{ github.event.inputs.enable_ttyd || 'true' }}
-  ENABLE_UPNP_INPUT: ${{ github.event.inputs.enable_upnp || 'true' }}
+  ENABLE_PROXY_INPUT: ${{ github.event.inputs.enable_proxy || 'false' }}
+  ENABLE_TTYD_INPUT: ${{ github.event.inputs.enable_ttyd || 'false' }}
+  ENABLE_UPNP_INPUT: ${{ github.event.inputs.enable_upnp || 'false' }}
   ENABLE_PACKAGE_MANAGER_INPUT: ${{ github.event.inputs.enable_package_manager || 'false' }}
   ENABLE_WRTBWMON_INPUT: ${{ github.event.inputs.enable_wrtbwmon || 'false' }}
-  ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'true' }}
+  ISTORE_ENABLE_INPUT: ${{ github.event.inputs.enable_istore || 'false' }}
   EXTRA_PACKAGES_INPUT: ${{ github.event.inputs.extra_packages || '' }}
   REMOVE_PACKAGES_INPUT: ${{ github.event.inputs.remove_packages || '' }}
   CCACHE_DIR: /workdir/.ccache
@@ -347,7 +347,7 @@ jobs:
             fi
           }
 
-          toggle_packages "$ENABLE_PROXY_INPUT" "luci-app-openclash"
+          toggle_packages "$ENABLE_PROXY_INPUT" "luci-app-openclash dns2socks coreutils-nohup bash curl"
           toggle_packages "$ENABLE_TTYD_INPUT" "luci-app-ttyd luci-i18n-ttyd-zh-cn"
           toggle_packages "$ENABLE_UPNP_INPUT" "luci-app-upnp luci-i18n-upnp-zh-cn"
           toggle_packages "$ENABLE_PACKAGE_MANAGER_INPUT" "luci-app-package-manager luci-i18n-package-manager-zh-cn"

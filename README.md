@@ -8,7 +8,7 @@
 
 ## immortalwrt 源码
 
-编译自 https://github.com/padavanonly/immortalwrt-mt798x-6.6 ，兼容 Cudy Tr3000 128M 新 flash
+编译自 https://github.com/padavanonly/immortalwrt-mt798x-6.6 ，默认面向 Cudy TR3000 v1 256MB flash 版。
 
 ---
 
@@ -53,14 +53,14 @@ echo 1 > /sys/class/gpio/modem_power/value
 
 ---
 
-## 第三方软件包
+## 默认软件包
 
-- [OpenClash](https://github.com/vernesong/OpenClash)
-- [Bandix](https://github.com/timsaya/luci-app-bandix)
 - [luci-theme-argon](https://github.com/jerrykuku/luci-theme-argon)
 - [luci-app-argon-config](https://github.com/jerrykuku/luci-app-argon-config)
-- luci-app-ttyd
-- luci-app-upnp
+- luci-app-button-automation
+- luci-app-irqbalance
+- luci-app-mtwifi-cfg
+- luci-app-turboacc-mtk
 - kmod-usb-net-cdc-ether
 - kmod-usb-net-cdc-mbim
 - kmod-usb-net-cdc-ncm
@@ -72,6 +72,8 @@ echo 1 > /sys/class/gpio/modem_power/value
 - kmod-usb-net-rndis
 - kmod-usb-wdm
 - kmod-mtd-rw
+
+`OpenClash`、`ttyd`、`UPnP`、`wrtbwmon`、`iStore`、软件包管理等功能默认不进基础固件，可在工作流输入中按需启用。
 
 ---
 

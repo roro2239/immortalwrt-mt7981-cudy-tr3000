@@ -29,11 +29,11 @@ sed -i -e '/^IMG_PREFIX:=/i BUILD_DATE := $(shell date +%Y%m%d)' \
 # set ubi to 122M
 # sed -i 's/reg = <0x5c0000 0x7000000>;/reg = <0x5c0000 0x7a40000>;/' target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts
 
-# Add OpenClash Meta
-mkdir -p files/etc/openclash/core
-
-wget -qO "clash_meta.tar.gz" "https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-arm64.tar.gz"
-tar -zxvf "clash_meta.tar.gz" -C files/etc/openclash/core/
-mv files/etc/openclash/core/clash files/etc/openclash/core/clash_meta
-chmod +x files/etc/openclash/core/clash_meta
-rm -f "clash_meta.tar.gz"
+if [ "${ENABLE_PROXY:-false}" = "true" ]; then
+  mkdir -p files/etc/openclash/core
+  wget -qO "clash_meta.tar.gz" "https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-arm64.tar.gz"
+  tar -zxvf "clash_meta.tar.gz" -C files/etc/openclash/core/
+  mv files/etc/openclash/core/clash files/etc/openclash/core/clash_meta
+  chmod +x files/etc/openclash/core/clash_meta
+  rm -f "clash_meta.tar.gz"
+fi

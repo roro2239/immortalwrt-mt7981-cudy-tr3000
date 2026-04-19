@@ -74,3 +74,4 @@
 - [CHORE] 2026-03-23：按需求移除 `luci-app-ufi-tools`。删除 `package/luci-app-ufi-tools`，并从 `config/256m.config` 与 `diy-part1.sh` 移除该插件默认启用与注入逻辑。
 - [CHORE] 2026-04-19：按需求收敛 USB 网络为“只提供驱动”。移除全量工作流中的 `100-usb-turboacc`、`101-usb-tethering`、`90-usb-tethering` 注入逻辑，默认配置取消 `luci-proto-mbim/ncm/qmi`、`comgt/comgt-ncm`、`umbim/uqmi`、`wwan`、`usb-modeswitch`、`usbutils`，并删除 `package/luci-app-usb-network` 残留目录。
 - [CHORE] 2026-04-19：按需求收敛 LuCI 页面风格。`luci-app-button-automation` 去除自定义 Hero 与内联视觉样式，事件监测改回默认 `cbi-section` 结构；移除 `luci-app-home-dashboard` 默认启用、构建注入和插件目录，首页回归默认 LuCI。
+- [CHORE] 2026-04-19：优化 TR3000 256MB 构建基线。保留 `Argon` 主题与 MT7981/2.5G/USB3/WiFi 硬件必需包，关闭发布固件不必要的内核调试信息；`OpenClash`、`ttyd`、`UPnP`、`wrtbwmon`、`iStore`、软件包管理和 `Bandix` 不再作为基础默认项，改由工作流开关或额外包控制。
