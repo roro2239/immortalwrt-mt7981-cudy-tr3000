@@ -72,3 +72,5 @@
 - [FEAT] 2026-03-23：全量工作流新增构建参数 `enable_usb_power`（默认 `true`），构建前动态改写 `target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1.dtsi` 的 `modem_power` 默认输出，实现 USB 供电默认开/关可配置。
 - [FIX] 2026-03-23：修复 5G WiFi 默认非 AX。`96-mtwifi-stability` 将 5G `htmode` 强制值由 `VHT80` 调整为 `HE80`，恢复默认 802.11ax 模式。
 - [CHORE] 2026-03-23：按需求移除 `luci-app-ufi-tools`。删除 `package/luci-app-ufi-tools`，并从 `config/256m.config` 与 `diy-part1.sh` 移除该插件默认启用与注入逻辑。
+- [CHORE] 2026-04-19：按需求收敛 USB 网络为“只提供驱动”。移除全量工作流中的 `100-usb-turboacc`、`101-usb-tethering`、`90-usb-tethering` 注入逻辑，默认配置取消 `luci-proto-mbim/ncm/qmi`、`comgt/comgt-ncm`、`umbim/uqmi`、`wwan`、`usb-modeswitch`、`usbutils`，并删除 `package/luci-app-usb-network` 残留目录。
+- [CHORE] 2026-04-19：按需求收敛 LuCI 页面风格。`luci-app-button-automation` 去除自定义 Hero 与内联视觉样式，事件监测改回默认 `cbi-section` 结构；移除 `luci-app-home-dashboard` 默认启用、构建注入和插件目录，首页回归默认 LuCI。
