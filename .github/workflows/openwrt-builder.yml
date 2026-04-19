@@ -227,6 +227,7 @@ jobs:
       - name: 构建 256M 固件
         id: compile
         run: |
+          set -o pipefail
           FW_NAME="${FIRMWARE_NAME_INPUT}"
           [ -z "$FW_NAME" ] && FW_NAME="CeliaWRT"
           FW_TAG_PREFIX=$(echo "$FW_NAME" | tr '[:space:]' '-' | tr -cd '[:alnum:]._-')
@@ -359,6 +360,9 @@ jobs:
 
           DEVICES="256M"
           mkdir -p $GITHUB_WORKSPACE/firmware_collection
+          BUILD_LOG_DIR="$GITHUB_WORKSPACE/build_logs"
+          rm -rf "$BUILD_LOG_DIR"
+          mkdir -p "$BUILD_LOG_DIR"
 
           cd /workdir/openwrt
 
@@ -589,9 +593,22 @@ jobs:
             if ! make -j"${BUILD_JOBS}" -l"${BUILD_LOAD}" CC="ccache gcc" CXX="ccache g++"; then
               stop_heartbeat
               echo "多线程构建失败，回退到单线程重试"
+              echo "[$DEV] 多线程失败时间: $(date '+%F %T')" | tee -a "$BUILD_LOG_DIR/${DEV}-summary.log"
               start_heartbeat
-              if ! make -j1 V=s; then
+              SINGLE_LOG_FILE="$BUILD_LOG_DIR/${DEV}-single-thread.log"
+              if ! make -j1 V=s 2>&1 | tee "$SINGLE_LOG_FILE"; then
                 stop_heartbeat
+                {
+                  echo "[$DEV] 单线程构建失败时间: $(date '+%F %T')"
+                  echo "[$DEV] /workdir 磁盘占用:"
+                  df -hT /workdir
+                  echo
+                  echo "[$DEV] bin/targets 最近文件:"
+                  find bin/targets/ -type f | tail -n 20 || true
+                  echo
+                  echo "[$DEV] 错误日志尾部:"
+                  tail -n 200 "$SINGLE_LOG_FILE" || true
+                } | tee -a "$BUILD_LOG_DIR/${DEV}-summary.log"
                 exit 1
               fi
             fi
@@ -610,6 +627,14 @@ jobs:
           done < <(find bin/targets/ -name "*sysupgrade.bin" -type f)
 
           echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/build_logs/*
+          if-no-files-found: ignore
 
       - name: 上传二进制产物
         uses: actions/upload-artifact@v4
