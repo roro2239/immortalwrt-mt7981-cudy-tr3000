@@ -344,19 +344,37 @@ jobs:
           sort -u /workdir/custom-pkgs.txt -o /workdir/custom-pkgs.txt
 
           : > /workdir/custom-feed-pkgs.txt
+          {
+            printf '%s\n' \
+              cgi-io \
+              lua \
+              lua-cjson \
+              luci-base \
+              luci-compat \
+              luci-lib-base \
+              luci-lib-ipkg \
+              lucihttp \
+              rpcd-mod-luci \
+              ucode \
+              ucode-mod-html \
+              ucode-mod-lua
+            if [ "${#CUSTOM_FEED_PKGS[@]}" -gt 0 ]; then
+              printf '%s\n' "${CUSTOM_FEED_PKGS[@]}"
+            fi
+          } | sed '/^$/d' | sort -u > /workdir/custom-feed-pkgs.txt
+
           if [ "${#CUSTOM_FEED_PKGS[@]}" -gt 0 ]; then
-            printf '%s\n' "${CUSTOM_FEED_PKGS[@]}" | sed '/^$/d' | sort -u > /workdir/custom-feed-pkgs.txt
+            echo "检测到的直接 feed 依赖："
+            printf '%s\n' "${CUSTOM_FEED_PKGS[@]}" | sed '/^$/d' | sort -u
+          else
+            echo "未检测到插件直接 feed 依赖"
           fi
 
           echo "本次 SDK 编译插件："
           cat /workdir/custom-pkgs.txt
 
-          if [ -s /workdir/custom-feed-pkgs.txt ]; then
-            echo "检测到的直接 feed 依赖："
-            cat /workdir/custom-feed-pkgs.txt
-          else
-            echo "未检测到需要安装的 feed 依赖"
-          fi
+          echo "本次 SDK 安装的 feed 依赖："
+          cat /workdir/custom-feed-pkgs.txt
 
           if [ -n "${PLUGIN_VERSION_INPUT}" ]; then
             echo "统一插件版本号：${PLUGIN_VERSION_INPUT}"
@@ -367,12 +385,6 @@ jobs:
         run: |
           set -euo pipefail
           cd "${SDK_DIR}"
-
-          if [ ! -s /workdir/custom-feed-pkgs.txt ]; then
-            echo "未检测到 feed 依赖，跳过按需安装"
-            make defconfig
-            exit 0
-          fi
 
           echo "开始按需安装以下 feed 依赖："
           cat /workdir/custom-feed-pkgs.txt
